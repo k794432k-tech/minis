@@ -1,0 +1,256 @@
+# Build an iOS .ipa on GitHub Actions.
+#
+# Produces two files (Actions run → Artifacts, and a Release when a v* tag is pushed):
+#   Minis-unsigned.ipa     no signature; sign it when installing
+#                          (Sideloadly, AltStore, SideStore, an enterprise/dev cert, …)
+#   Minis-trollstore.tipa  fake-signed with ldid and the app's entitlements,
+#                          for TrollStore only
+#
+# Run it from the Actions tab ("Build iOS IPA" → Run workflow), or push a tag
+# like v1.15.0 to also publish a GitHub Release.
+#
+# The first run builds every native dependency from source (iSH, FFmpeg, LAME,
+# rclone, Alpine rootfs, llama.cpp download) and takes roughly 40–70 minutes.
+# The results are cached, so later runs only build the app.
+
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: "Build configuration"
+        type: choice
+        options: [Release, Debug]
+        default: Release
+      llama_cpp_tag:
+        description: "llama.cpp release tag for the on-device model runtime"
+        type: string
+        default: b11669
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # needed only to publish the Release on tag pushes
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 180
+    env:
+      CONFIGURATION: ${{ inputs.configuration || 'Release' }}
+      LLAMA_CPP_TAG: ${{ inputs.llama_cpp_tag || 'b11669' }}
+      DERIVED_DATA: ${{ github.workspace }}/build/DerivedData
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      # A repository created by uploading the source (instead of forking
+      # OpenMinis/OpenMinis) has empty submodule folders. Fetch them directly.
+      - name: Make sure submodules are present
+        run: |
+          set -euo pipefail
+          if [ -z "$(ls -A deps/ish 2>/dev/null)" ]; then
+            echo "deps/ish is empty — cloning OpenMinis/ish-arm64"
+            rm -rf deps/ish
+            git clone --depth 1 --recursive --shallow-submodules -b master https://github.com/OpenMinis/ish-arm64.git deps/ish
+          fi
+          if [ -z "$(ls -A deps/proot 2>/dev/null)" ]; then
+            echo "deps/proot is empty — cloning OpenMinis/proot (Android only, kept for completeness)"
+            rm -rf deps/proot
+            git clone --depth 1 -b master https://github.com/OpenMinis/proot.git deps/proot || true
+          fi
+          echo "ISH_REV=$(git -C deps/ish rev-parse HEAD 2>/dev/null || echo unknown)" >> "$GITHUB_ENV"
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$XCODE" ]; then
+            echo "::error::No Xcode 26 found on this runner. The project needs the iOS 26.2 SDK or newer."
+            ls -d /Applications/Xcode*.app
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Download the Metal toolchain
+        # FFmpeg's configure silently drops a Metal filter without it.
+        continue-on-error: true
+        run: |
+          xcodebuild -downloadComponent MetalToolchain || true
+          xcrun -sdk iphoneos metal --version || true
+
+      - name: Install build tools
+        run: |
+          set -euo pipefail
+          brew install ninja llvm libarchive pkg-config meson ldid || brew install ninja llvm libarchive pkg-config meson
+          echo "$(brew --prefix libarchive)/bin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
+
+      - name: Set up Go (for rclone)
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: deps/rclone-mobile/go.sum
+
+      - name: Restore native dependency cache
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps/lame-build
+            deps/frameworks
+            deps/libs
+            deps/include
+            deps/resources
+            deps/.cache
+          key: ios-deps-v1-${{ env.ISH_REV }}-${{ env.LLAMA_CPP_TAG }}-${{ hashFiles('deps/*.sh', 'deps/ffmpeg-patch/**', 'deps/rclone-mobile/go.sum', 'deps/rclone-mobile/**/*.go') }}
+
+      - name: Build native dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          # Order matters: FFmpeg links LAME.
+          ./deps/build_lame.sh
+          ./deps/build_ffmpeg.sh
+          ./deps/build_ish.sh
+          ./deps/prepare_alpine_rootfs.sh
+          ./deps/build_rclone_ios.sh
+          ./deps/fetch_llama_xcframework.sh --force
+
+      - name: Make sure llama.xcframework is present
+        run: |
+          set -euo pipefail
+          if [ ! -d deps/frameworks/llama.xcframework ]; then
+            ./deps/fetch_llama_xcframework.sh
+          fi
+          ls deps/frameworks
+
+      - name: Build-time customization
+        env:
+          ANTHROPIC_OAUTH_IDENTIFIER_PROMPT: ${{ secrets.ANTHROPIC_OAUTH_IDENTIFIER_PROMPT }}
+        run: |
+          set -euo pipefail
+          CFG=src/ios/Configs/ProviderCustomization.xcconfig
+          cp src/ios/Configs/ProviderCustomization.xcconfig.example "$CFG"
+          if [ -n "${ANTHROPIC_OAUTH_IDENTIFIER_PROMPT:-}" ]; then
+            # Optional: only needed for Claude OAuth sign-in (see BUILDING.md).
+            sed -i '' '/^ANTHROPIC_OAUTH_IDENTIFIER_PROMPT/d' "$CFG"
+            printf 'ANTHROPIC_OAUTH_IDENTIFIER_PROMPT = %s\n' "$ANTHROPIC_OAUTH_IDENTIFIER_PROMPT" >> "$CFG"
+          fi
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project src/ios/Minis.xcodeproj -scheme Minis \
+            -derivedDataPath "$DERIVED_DATA" \
+            -skipPackagePluginValidation -skipMacroValidation
+
+      - name: Build app (unsigned)
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          xcodebuild build \
+            -project src/ios/Minis.xcodeproj \
+            -scheme Minis \
+            -configuration "$CONFIGURATION" \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$DERIVED_DATA" \
+            -skipPackagePluginValidation -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            | tee build/xcodebuild.log | grep -E "error:|warning: .*deprecated|\*\* BUILD" || true
+          if ! grep -q "\*\* BUILD SUCCEEDED \*\*" build/xcodebuild.log; then
+            echo "::error::xcodebuild failed — see the xcodebuild-log artifact"
+            grep -E "error:" build/xcodebuild.log | head -100 || true
+            exit 1
+          fi
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          APP="$DERIVED_DATA/Build/Products/${CONFIGURATION}-iphoneos/Minis.app"
+          test -d "$APP" || { echo "::error::Minis.app not found at $APP"; exit 1; }
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Info.plist" 2>/dev/null || echo "0")
+          BUILD=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$APP/Info.plist" 2>/dev/null || echo "0")
+          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "APP_BUILD=$BUILD" >> "$GITHUB_ENV"
+
+          mkdir -p out/unsigned/Payload
+          cp -R "$APP" out/unsigned/Payload/
+          (cd out/unsigned && zip -qry ../Minis-unsigned.ipa Payload)
+
+          # TrollStore variant: ad-hoc/fake signature carrying the real
+          # entitlements of each bundle (ldid signs Mach-O executables).
+          if command -v ldid >/dev/null; then
+            mkdir -p out/troll/Payload
+            cp -R "$APP" out/troll/Payload/
+            T=out/troll/Payload/Minis.app
+            exe_of() { /usr/libexec/PlistBuddy -c "Print CFBundleExecutable" "$1/Info.plist" 2>/dev/null || basename "$1" | sed 's/\.[^.]*$//'; }
+            ent_for() {
+              local e
+              e=$(xcodebuild -project src/ios/Minis.xcodeproj -target "$1" -configuration "$CONFIGURATION" \
+                -showBuildSettings 2>/dev/null | awk -F' = ' '/ CODE_SIGN_ENTITLEMENTS = /{print $2; exit}')
+              [ -z "$e" ] && return 0
+              case "$e" in /*) [ -f "$e" ] && echo "$e" ;; *) [ -f "src/ios/$e" ] && echo "src/ios/$e" ;; esac
+            }
+            sign() { # bundle [entitlements]
+              local bin="$1/$(exe_of "$1")"
+              [ -f "$bin" ] || return 0
+              if [ -n "${2:-}" ]; then ldid -S"$2" "$bin"; else ldid -S "$bin"; fi
+            }
+            for fw in "$T"/Frameworks/*.framework; do [ -d "$fw" ] && sign "$fw"; done
+            for lib in "$T"/Frameworks/*.dylib; do [ -f "$lib" ] && ldid -S "$lib"; done
+            for ext in "$T"/PlugIns/*.appex; do
+              [ -d "$ext" ] || continue
+              sign "$ext" "$(ent_for "$(basename "$ext" .appex)")"
+            done
+            sign "$T" "$(ent_for Minis)"
+            (cd out/troll && zip -qry ../Minis-trollstore.tipa Payload)
+          else
+            echo "::warning::ldid not available — skipping the TrollStore build"
+          fi
+          ls -lh out/*.ipa out/*.tipa 2>/dev/null || true
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Minis-${{ env.APP_VERSION }}-${{ env.APP_BUILD }}-${{ env.CONFIGURATION }}
+          path: |
+            out/Minis-unsigned.ipa
+            out/Minis-trollstore.tipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            out/Minis-unsigned.ipa
+            out/Minis-trollstore.tipa
+          generate_release_notes: true
