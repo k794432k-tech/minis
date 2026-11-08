@@ -100,10 +100,16 @@ struct BackupRestoreView: View {
         // mount screen uses a picker sheet. The picked URL is handed over on
         // the next run-loop tick, after the sheet has left the hierarchy.
         .sheet(isPresented: $showPicker) {
-            BackupPackagePicker { url in
+            BackupPackagePicker(onPick: { url in
                 logger.info("[Restore] picked \(url.lastPathComponent)")
+                // The picker dismisses itself, which SwiftUI does not see:
+                // reset the binding, or the sheet still counts as presented
+                // and the later "Restore this backup?" alert never appears.
+                showPicker = false
                 DispatchQueue.main.async { load(url) }
-            }
+            }, onCancel: {
+                showPicker = false
+            })
             .ignoresSafeArea()
         }
         .sheet(isPresented: $showServerPicker) {
@@ -123,7 +129,10 @@ struct BackupRestoreView: View {
         // pointing at an unrelated row. A centred alert is the right shape for
         // a single yes/no about the whole operation.
         .alert("Restore this backup?", isPresented: $showConfirm) {
-            Button("Restore") { Task { await runImport() } }
+            Button("Restore") {
+                logger.info("[Restore] confirmed")
+                Task { await runImport() }
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Items from the backup are merged into your existing data. Nothing is deleted, and anything you've changed more recently is kept.")
@@ -492,7 +501,10 @@ struct BackupRestoreView: View {
                 // [T-restore-lock-passphrase] Put the keyboard away before the
                 // confirmation, so it is not left up for the whole restore.
                 passphraseFocused = false
-                showConfirm = true
+                logger.info("[Restore] Start Restore tapped (categories=\(selected.count))")
+                // Next tick: lets the keyboard / any closing sheet finish so
+                // the alert is not dropped.
+                DispatchQueue.main.async { showConfirm = true }
             } label: {
                 // [T-restore-primary-action] Centred icon + label, matching
                 // Start Backup on the other tab. This is the screen's primary
@@ -1707,6 +1719,7 @@ struct ServerPackageListView: View {
 /// in place; `load(_:)` copies the file out of its security scope.
 private struct BackupPackagePicker: UIViewControllerRepresentable {
     let onPick: (URL) -> Void
+    var onCancel: () -> Void = {}
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
         let picker = UIDocumentPickerViewController(
@@ -1719,15 +1732,23 @@ private struct BackupPackagePicker: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
 
-    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick, onCancel: onCancel) }
 
     final class Coordinator: NSObject, UIDocumentPickerDelegate {
         let onPick: (URL) -> Void
-        init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
+        let onCancel: () -> Void
+        init(onPick: @escaping (URL) -> Void, onCancel: @escaping () -> Void) {
+            self.onPick = onPick
+            self.onCancel = onCancel
+        }
 
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            guard let url = urls.first else { return }
+            guard let url = urls.first else { onCancel(); return }
             onPick(url)
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancel()
         }
     }
 }
