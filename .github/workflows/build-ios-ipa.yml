@@ -153,8 +153,12 @@ jobs:
       - name: Install build tools
         run: |
           set -euo pipefail
-          brew install ninja llvm libarchive pkg-config meson ldid || brew install ninja llvm libarchive pkg-config meson
+          # lld is a separate formula from llvm since LLVM 19; iSH's VDSO is
+          # linked with -fuse-ld=lld.
+          brew install ninja llvm lld libarchive pkg-config meson ldid || brew install ninja llvm lld libarchive pkg-config meson
           echo "$(brew --prefix libarchive)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          "$(brew --prefix lld)/bin/ld.lld" --version
           echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> "$GITHUB_ENV"
 
       - name: Set up Go (for rclone)
@@ -180,13 +184,33 @@ jobs:
         if: steps.deps-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
+          mkdir -p build/logs
+          # Runs one script with its output logged; on failure the last lines
+          # become an error annotation, which is visible on the run page
+          # without signing in.
+          step() {
+            local name="$1"; shift
+            local log="build/logs/$name.log"
+            echo "::group::$name"
+            set +e
+            "$@" 2>&1 | tee "$log"
+            local rc=${PIPESTATUS[0]}
+            set -e
+            echo "::endgroup::"
+            if [ "$rc" -ne 0 ]; then
+              local tailtext
+              tailtext=$(tail -n 30 "$log" | perl -pe 's/\e\[[0-9;]*m//g; s/\r//g; s/%/%25/g' | awk '{printf "%s%%0A", $0}')
+              echo "::error title=$name failed (exit $rc)::$tailtext"
+              exit "$rc"
+            fi
+          }
           # Order matters: FFmpeg links LAME.
-          ./deps/build_lame.sh
-          ./deps/build_ffmpeg.sh
-          ./deps/build_ish.sh
-          ./deps/prepare_alpine_rootfs.sh
-          ./deps/build_rclone_ios.sh
-          ./deps/fetch_llama_xcframework.sh --force
+          step lame ./deps/build_lame.sh
+          step ffmpeg ./deps/build_ffmpeg.sh
+          step ish ./deps/build_ish.sh
+          step alpine-rootfs ./deps/prepare_alpine_rootfs.sh
+          step rclone ./deps/build_rclone_ios.sh
+          step llama ./deps/fetch_llama_xcframework.sh --force
 
       - name: Make sure llama.xcframework is present
         run: |
@@ -233,8 +257,11 @@ jobs:
             DEVELOPMENT_TEAM="" \
             | tee build/xcodebuild.log | grep -E "error:|warning: .*deprecated|\*\* BUILD" || true
           if ! grep -q "\*\* BUILD SUCCEEDED \*\*" build/xcodebuild.log; then
+            # One annotation per compiler error (visible without signing in).
+            grep -E "error:" build/xcodebuild.log | sort -u | head -40 | while IFS= read -r line; do
+              echo "::error::$(printf '%s' "$line" | sed -e 's/%/%25/g')"
+            done || true
             echo "::error::xcodebuild failed — see the xcodebuild-log artifact"
-            grep -E "error:" build/xcodebuild.log | head -100 || true
             exit 1
           fi
 
@@ -299,7 +326,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: xcodebuild-log
-          path: build/xcodebuild.log
+          path: |
+            build/xcodebuild.log
+            build/logs/
           if-no-files-found: ignore
           retention-days: 14
 
