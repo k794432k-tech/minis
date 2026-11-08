@@ -15,6 +15,9 @@
 
 import UIKit
 import UniformTypeIdentifiers
+import os
+
+private let pickerLog = Logger(subsystem: "com.openminis.app", category: "DocPicker")
 
 @MainActor
 final class DocumentPickerPresenter: NSObject, UIDocumentPickerDelegate {
@@ -36,7 +39,7 @@ final class DocumentPickerPresenter: NSObject, UIDocumentPickerDelegate {
         onPick: @escaping ([URL]) -> Void
     ) {
         guard let host = topViewController() else {
-            minisLogger.error("[DocPicker] no view controller to present from")
+            pickerLog.error("[DocPicker] no view controller to present from")
             onCancel()
             return
         }
@@ -46,13 +49,13 @@ final class DocumentPickerPresenter: NSObject, UIDocumentPickerDelegate {
         picker.delegate = presenter
         picker.allowsMultipleSelection = multiple
         picker.modalPresentationStyle = .formSheet
-        minisLogger.info("[DocPicker] presenting from \(String(describing: type(of: host)))")
+        pickerLog.info("[DocPicker] presenting from \(String(describing: type(of: host)))")
         host.present(picker, animated: true)
     }
 
     nonisolated func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         Task { @MainActor in
-            minisLogger.info("[DocPicker] picked \(urls.count) file(s)")
+            pickerLog.info("[DocPicker] picked \(urls.count) file(s)")
             Self.active = nil
             // Give the picker's own dismissal a moment so whatever the caller
             // presents next (an alert, a progress row) is not swallowed by it.
