@@ -167,9 +167,12 @@ jobs:
           go-version: "1.25"
           cache-dependency-path: deps/rclone-mobile/go.sum
 
+      # Restore and save are separate steps so a later failure (e.g. a
+      # compile error in the app) does not throw away 30+ minutes of
+      # dependency builds.
       - name: Restore native dependency cache
         id: deps-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             deps/lame-build
@@ -178,7 +181,7 @@ jobs:
             deps/include
             deps/resources
             deps/.cache
-          key: ios-deps-v1-${{ env.ISH_REV }}-${{ env.LLAMA_CPP_TAG }}-${{ hashFiles('deps/*.sh', 'deps/ffmpeg-patch/**', 'deps/rclone-mobile/go.sum', 'deps/rclone-mobile/**/*.go') }}
+          key: ios-deps-v2-${{ env.ISH_REV }}-${{ hashFiles('deps/build_*.sh', 'deps/prepare_alpine_rootfs.sh', 'deps/ffmpeg-patch/**', 'deps/rclone-mobile/go.sum', 'deps/rclone-mobile/**/*.go') }}
 
       - name: Build native dependencies
         if: steps.deps-cache.outputs.cache-hit != 'true'
@@ -210,14 +213,31 @@ jobs:
           step ish ./deps/build_ish.sh
           step alpine-rootfs ./deps/prepare_alpine_rootfs.sh
           step rclone ./deps/build_rclone_ios.sh
-          step llama ./deps/fetch_llama_xcframework.sh --force
 
-      - name: Make sure llama.xcframework is present
+      - name: Save native dependency cache
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            deps/lame-build
+            deps/frameworks
+            deps/libs
+            deps/include
+            deps/resources
+            deps/.cache
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+
+      - name: Restore llama.cpp cache
+        id: llama-cache
+        uses: actions/cache@v4
+        with:
+          path: deps/.cache/llama.cpp
+          key: llama-xcframework-${{ env.LLAMA_CPP_TAG }}
+
+      - name: Fetch llama.xcframework
         run: |
           set -euo pipefail
-          if [ ! -d deps/frameworks/llama.xcframework ]; then
-            ./deps/fetch_llama_xcframework.sh
-          fi
+          ./deps/fetch_llama_xcframework.sh --force
           ls deps/frameworks
 
       - name: Build-time customization

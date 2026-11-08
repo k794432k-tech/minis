@@ -36,7 +36,8 @@ mkdir -p "$CACHE" "$OUT"
 
 if [[ ! -f "$ARCHIVE" ]]; then
   echo "Downloading $URL"
-  curl -fL --retry 3 -o "$ARCHIVE.part" "$URL"
+  # GitHub's release CDN occasionally answers 503; retry generously.
+  curl -fL --retry 6 --retry-all-errors --retry-delay 15 --connect-timeout 30 -o "$ARCHIVE.part" "$URL"
   mv "$ARCHIVE.part" "$ARCHIVE"
 fi
 
