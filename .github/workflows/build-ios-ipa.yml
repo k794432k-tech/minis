@@ -1,10 +1,8 @@
 # Build an iOS .ipa on GitHub Actions.
 #
-# Produces two files (Actions run → Artifacts, and a Release when a v* tag is pushed):
-#   Minis-unsigned.ipa     no signature; sign it when installing
-#                          (Sideloadly, AltStore, SideStore, an enterprise/dev cert, …)
-#   Minis-trollstore.tipa  fake-signed with ldid and the app's entitlements,
-#                          for TrollStore only
+# Produces Minis-unsigned.ipa (Actions run → Artifacts, and a Release when
+# requested): no signature; sign it when installing (全能签, Sideloadly,
+# AltStore, an enterprise/dev cert, …).
 #
 # Run it from the Actions tab ("Build iOS IPA" → Run workflow), or push a tag
 # like v1.15.0 to also publish a GitHub Release.
@@ -159,7 +157,7 @@ jobs:
           set -euo pipefail
           # lld is a separate formula from llvm since LLVM 19; iSH's VDSO is
           # linked with -fuse-ld=lld.
-          brew install ninja llvm lld libarchive pkg-config meson ldid || brew install ninja llvm lld libarchive pkg-config meson
+          brew install ninja llvm lld libarchive pkg-config meson
           echo "$(brew --prefix libarchive)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
           "$(brew --prefix lld)/bin/ld.lld" --version
@@ -303,37 +301,7 @@ jobs:
           cp -R "$APP" out/unsigned/Payload/
           (cd out/unsigned && zip -qry ../Minis-unsigned.ipa Payload)
 
-          # TrollStore variant: ad-hoc/fake signature carrying the real
-          # entitlements of each bundle (ldid signs Mach-O executables).
-          if command -v ldid >/dev/null; then
-            mkdir -p out/troll/Payload
-            cp -R "$APP" out/troll/Payload/
-            T=out/troll/Payload/Minis.app
-            exe_of() { /usr/libexec/PlistBuddy -c "Print CFBundleExecutable" "$1/Info.plist" 2>/dev/null || basename "$1" | sed 's/\.[^.]*$//'; }
-            ent_for() {
-              local e
-              e=$(xcodebuild -project src/ios/Minis.xcodeproj -target "$1" -configuration "$CONFIGURATION" \
-                -showBuildSettings 2>/dev/null | awk -F' = ' '/ CODE_SIGN_ENTITLEMENTS = /{print $2; exit}')
-              [ -z "$e" ] && return 0
-              case "$e" in /*) [ -f "$e" ] && echo "$e" ;; *) [ -f "src/ios/$e" ] && echo "src/ios/$e" ;; esac
-            }
-            sign() { # bundle [entitlements]
-              local bin="$1/$(exe_of "$1")"
-              [ -f "$bin" ] || return 0
-              if [ -n "${2:-}" ]; then ldid -S"$2" "$bin"; else ldid -S "$bin"; fi
-            }
-            for fw in "$T"/Frameworks/*.framework; do [ -d "$fw" ] && sign "$fw"; done
-            for lib in "$T"/Frameworks/*.dylib; do [ -f "$lib" ] && ldid -S "$lib"; done
-            for ext in "$T"/PlugIns/*.appex; do
-              [ -d "$ext" ] || continue
-              sign "$ext" "$(ent_for "$(basename "$ext" .appex)")"
-            done
-            sign "$T" "$(ent_for Minis)"
-            (cd out/troll && zip -qry ../Minis-trollstore.tipa Payload)
-          else
-            echo "::warning::ldid not available — skipping the TrollStore build"
-          fi
-          ls -lh out/*.ipa out/*.tipa 2>/dev/null || true
+          ls -lh out/*.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
@@ -341,7 +309,6 @@ jobs:
           name: Minis-${{ env.APP_VERSION }}-${{ env.APP_BUILD }}-${{ env.CONFIGURATION }}
           path: |
             out/Minis-unsigned.ipa
-            out/Minis-trollstore.tipa
           if-no-files-found: error
           retention-days: 30
 
@@ -365,5 +332,4 @@ jobs:
           name: Minis ${{ inputs.release_tag || github.ref_name }}
           files: |
             out/Minis-unsigned.ipa
-            out/Minis-trollstore.tipa
           generate_release_notes: true
