@@ -22,6 +22,7 @@ struct LocalModelsView: View {
     @State private var serverRunning = LocalLLMServer.shared.isRunning
     @State private var loadedName: String? = LlamaEngine.shared.loadedPath.map { ($0 as NSString).lastPathComponent }
     @State private var unloadMessage: String?
+    @State private var busySeconds: Int?
     @State private var pendingDelete: LocalModelFile?
     @State private var errorMessage: String?
 
@@ -54,6 +55,7 @@ struct LocalModelsView: View {
             while !Task.isCancelled {
                 serverRunning = LocalLLMServer.shared.isRunning
                 loadedName = LlamaEngine.shared.loadedPath.map { ($0 as NSString).lastPathComponent }
+                busySeconds = LlamaEngine.shared.busySince.map { Int(Date().timeIntervalSince($0)) }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
@@ -174,6 +176,16 @@ struct LocalModelsView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
+            if let busySeconds {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Generating… \(busySeconds)s")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Stop") { LlamaEngine.shared.cancelAll() }
+                        .buttonStyle(.borderless)
+                }
+            }
             Button("Unload Model from Memory") {
                 LlamaEngine.shared.unloadAll {
                     Task { @MainActor in
@@ -182,7 +194,7 @@ struct LocalModelsView: View {
                     }
                 }
             }
-            .disabled(loadedName == nil)
+            // Always tappable: it also stops a running generation.
             if let unloadMessage {
                 Text(unloadMessage).font(.caption).foregroundStyle(.secondary)
             }

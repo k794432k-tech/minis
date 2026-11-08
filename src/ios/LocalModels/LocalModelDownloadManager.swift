@@ -226,6 +226,10 @@ final class LocalModelDownloadManager: NSObject, ObservableObject {
 
     func deleteModel(id: String) {
         guard let model = models.first(where: { $0.id == id }) else { return }
+        // Stop anything running first so the unload is not stuck behind it.
+        if LlamaEngine.shared.loadedPath == model.primaryURL.path {
+            LlamaEngine.shared.cancelAll()
+        }
         LlamaEngine.shared.unloadIfUsing(path: model.primaryURL.path)
         try? FileManager.default.removeItem(at: model.folderURL)
         LocalModelCatalog.shared.remove(id: id)

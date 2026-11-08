@@ -18,6 +18,7 @@ import CryptoKit
 import Foundation
 import ImageIO
 import llama
+import UIKit
 
 private let logger = AppLogger(category: "LlamaEngine")
 
@@ -119,7 +120,30 @@ final class LlamaEngine: @unchecked Sendable {
     private let activeLock = NSLock()
     private var activeFlags: [ObjectIdentifier: LlamaCancelFlag] = [:]
 
-    private init() {}
+    /// Longest a single request may run before it is stopped, so one runaway
+    /// generation cannot hold the engine (and every later load/unload) hostage.
+    static let maxRequestSeconds: TimeInterval = 300
+
+    private var backgroundObserver: NSObjectProtocol?
+
+    private init() {
+        // iOS does not allow GPU work in the background; a decode in flight
+        // when the app is backgrounded can fail or stall. Stop generations
+        // instead of leaving the queue blocked.
+        backgroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.cancelAll()
+        }
+    }
+
+    /// True while a request is being processed on the engine queue.
+    private let busyLock = NSLock()
+    private var _busySince: Date?
+    var busySince: Date? { busyLock.lock(); defer { busyLock.unlock() }; return _busySince }
+    private func setBusy(_ on: Bool) {
+        busyLock.lock(); _busySince = on ? Date() : nil; busyLock.unlock()
+    }
 
     private func track(_ flag: LlamaCancelFlag) {
         activeLock.lock(); activeFlags[ObjectIdentifier(flag)] = flag; activeLock.unlock()
@@ -150,6 +174,10 @@ final class LlamaEngine: @unchecked Sendable {
             let cancelFlag = LlamaCancelFlag()
             continuation.onTermination = { _ in cancelFlag.cancel() }
             track(cancelFlag)
+            // Hard time limit for this request.
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.maxRequestSeconds) {
+                cancelFlag.cancel()
+            }
             queue.async {
                 defer { self.untrack(cancelFlag) }
                 // Cancelled while waiting (e.g. "Unload" was tapped): do not load.
@@ -157,6 +185,13 @@ final class LlamaEngine: @unchecked Sendable {
                     continuation.finish(throwing: CancellationError())
                     return
                 }
+                // The model file may have been deleted while this waited.
+                guard FileManager.default.fileExists(atPath: config.path) else {
+                    continuation.finish(throwing: LlamaEngineError.modelLoadFailed(config.path))
+                    return
+                }
+                self.setBusy(true)
+                defer { self.setBusy(false) }
                 do {
                     try self.ensureLoaded(config)
                     let prompt = try self.applyTemplate(messages)
