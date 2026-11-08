@@ -147,6 +147,123 @@ final class LocalModelDownloadManager: NSObject, ObservableObject {
         launch(job)
     }
 
+    // MARK: Other sources
+
+    /// Downloads a GGUF from a direct link (Hugging Face / ModelScope file
+    /// pages are converted to their download URL).
+    func startLinkDownload(_ raw: String) throws {
+        guard let url = LocalModelHub.directDownloadURL(from: raw) else {
+            throw LocalModelHubError.badURL
+        }
+        var name = url.lastPathComponent.removingPercentEncoding ?? url.lastPathComponent
+        if url.host?.contains("modelscope") == true,
+           let filePath = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+               .queryItems?.first(where: { $0.name == "FilePath" })?.value {
+            name = (filePath as NSString).lastPathComponent
+        }
+        if !name.lowercased().hasSuffix(".gguf") { name += ".gguf" }
+        let isProjector = name.lowercased().contains("mmproj")
+        if isProjector {
+            throw NSError(domain: "LocalModels", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: AppLocalized("This link is a vision projector (mmproj). Download the model first, then add the projector from the model's menu."),
+            ])
+        }
+        let modelId = LocalModelCatalog.shared.makeUniqueId(for: name)
+        let folder = LocalModelPaths.sanitize("url__\(url.host ?? "link")__\(modelId)")
+        LocalModelPaths.ensureDirectory(LocalModelPaths.modelsDirectory.appendingPathComponent(folder, isDirectory: true))
+        let part = LocalModelDownloadJob.Part(repoPath: url.absoluteString, url: url, expectedSize: 0,
+                                              relativePath: "\(folder)/\(LocalModelPaths.sanitize(name))",
+                                              done: false, isProjector: false)
+        let job = LocalModelDownloadJob(
+            id: UUID().uuidString, modelId: modelId, displayName: name,
+            source: .url, repoId: url.host ?? "link", folderRelativePath: folder, parts: [part],
+            state: .downloading, errorMessage: nil, createdAt: Date()
+        )
+        launch(job)
+    }
+
+    /// Copies a GGUF picked in the Files app into the models folder.
+    /// `url` must be readable (security scope handled here).
+    func importModel(from url: URL) async throws {
+        let name = url.lastPathComponent
+        guard name.lowercased().hasSuffix(".gguf") else {
+            throw NSError(domain: "LocalModels", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: AppLocalized("Only .gguf model files can be imported."),
+            ])
+        }
+        let modelId = LocalModelCatalog.shared.makeUniqueId(for: name)
+        let folder = LocalModelPaths.sanitize("imported__\(modelId)")
+        let relative = "\(folder)/\(LocalModelPaths.sanitize(name))"
+        let dest = LocalModelPaths.modelsDirectory.appendingPathComponent(relative)
+        let size = try await Self.copyIn(url, to: dest)
+        let model = LocalModelFile(
+            id: modelId, displayName: name, source: .imported, repoId: AppLocalized("Files"),
+            repoPaths: [name], primaryRelativePath: relative, folderRelativePath: folder,
+            sizeBytes: size, downloadedAt: Date()
+        )
+        LocalModelCatalog.shared.upsert(model)
+        models = LocalModelCatalog.shared.models
+        logger.info("[Import] \(name) -> id=\(modelId) size=\(size)")
+        LocalModelProviderRegistrar.shared.modelsChanged()
+    }
+
+    /// Adds a vision projector picked in the Files app to an existing model.
+    func importProjector(from url: URL, for modelId: String) async throws {
+        guard var model = LocalModelCatalog.shared.model(id: modelId) else { return }
+        let name = url.lastPathComponent
+        guard name.lowercased().hasSuffix(".gguf") else {
+            throw NSError(domain: "LocalModels", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: AppLocalized("Only .gguf model files can be imported."),
+            ])
+        }
+        let relative = "\(model.folderRelativePath)/mmproj-\(LocalModelPaths.sanitize(name))"
+        let dest = LocalModelPaths.modelsDirectory.appendingPathComponent(relative)
+        let size = try await Self.copyIn(url, to: dest)
+        model.mmprojRelativePath = relative
+        model.mmprojRepoPath = name
+        model.sizeBytes += size
+        LocalModelCatalog.shared.upsert(model)
+        models = LocalModelCatalog.shared.models
+        LlamaEngine.shared.unloadIfUsing(path: model.primaryURL.path)
+        LocalModelProviderRegistrar.shared.modelsChanged()
+    }
+
+    /// Copies a (possibly multi-GB) file off the main thread and checks that
+    /// it is a GGUF. Returns its size.
+    private static func copyIn(_ source: URL, to dest: URL) async throws -> Int64 {
+        try await Task.detached(priority: .userInitiated) {
+            let accessed = source.startAccessingSecurityScopedResource()
+            defer { if accessed { source.stopAccessingSecurityScopedResource() } }
+            let fm = FileManager.default
+            // Coordinated read so iCloud / provider files are downloaded first.
+            var coordError: NSError?
+            var copyError: Error?
+            NSFileCoordinator().coordinate(readingItemAt: source, options: [], error: &coordError) { readURL in
+                do {
+                    LocalModelPaths.ensureDirectory(dest.deletingLastPathComponent())
+                    if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
+                    try fm.copyItem(at: readURL, to: dest)
+                } catch {
+                    copyError = error
+                }
+            }
+            if let error = coordError ?? copyError { throw error }
+            guard let handle = try? FileHandle(forReadingFrom: dest) else {
+                throw LlamaEngineError.modelLoadFailed(dest.path)
+            }
+            let magic = (try? handle.read(upToCount: 4)) ?? Data()
+            try? handle.close()
+            guard magic == Data("GGUF".utf8) else {
+                try? fm.removeItem(at: dest)
+                throw NSError(domain: "LocalModels", code: 4, userInfo: [
+                    NSLocalizedDescriptionKey: AppLocalized("That file is not a GGUF model."),
+                ])
+            }
+            let attrs = try? fm.attributesOfItem(atPath: dest.path)
+            return (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        }.value
+    }
+
     private func checkFreeSpace(_ needed: Int64) throws {
         if let free = Self.freeDiskSpace(), free < needed + 200 * 1_048_576 {
             throw NSError(domain: "LocalModels", code: 1, userInfo: [
@@ -281,7 +398,13 @@ final class LocalModelDownloadManager: NSObject, ObservableObject {
 
     // MARK: Delegate callbacks (hopped to the main actor)
 
-    fileprivate func didWrite(info: TaskInfo, written: Int64) {
+    fileprivate func didWrite(info: TaskInfo, written: Int64, expected: Int64) {
+        // Link downloads start without a known size; take it from the response.
+        if expected > 0, let i = jobs.firstIndex(where: { $0.id == info.jobId }),
+           info.partIndex < jobs[i].parts.count, jobs[i].parts[info.partIndex].expectedSize == 0 {
+            jobs[i].parts[info.partIndex].expectedSize = expected
+            saveJobs()
+        }
         partProgress[info.jobId, default: [:]][info.partIndex] = written
         let now = Date()
         if let last = lastProgressPublish[info.jobId], now.timeIntervalSince(last) < 0.3 { return }
@@ -421,7 +544,9 @@ private final class DownloadDelegateProxy: NSObject, URLSessionDownloadDelegate,
                     didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
                     totalBytesExpectedToWrite: Int64) {
         guard let info = TaskInfo(downloadTask.taskDescription) else { return }
-        Task { @MainActor [weak owner = self.owner] in owner?.didWrite(info: info, written: totalBytesWritten) }
+        Task { @MainActor [weak owner = self.owner] in
+            owner?.didWrite(info: info, written: totalBytesWritten, expected: totalBytesExpectedToWrite)
+        }
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {

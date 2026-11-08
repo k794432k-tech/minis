@@ -7,6 +7,8 @@
 //
 
 import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
 
 struct LocalModelsView: View {
     @ObservedObject private var downloads = LocalModelDownloadManager.shared
@@ -23,6 +25,11 @@ struct LocalModelsView: View {
     @State private var loadedName: String? = LlamaEngine.shared.loadedPath.map { ($0 as NSString).lastPathComponent }
     @State private var unloadMessage: String?
     @State private var busySeconds: Int?
+    @State private var showModelPicker = false
+    @State private var projectorTarget: LocalModelFile?
+    @State private var showLinkSheet = false
+    @State private var linkText = ""
+    @State private var importing: String?
     @State private var pendingDelete: LocalModelFile?
     @State private var errorMessage: String?
 
@@ -37,8 +44,26 @@ struct LocalModelsView: View {
                 } label: {
                     Label("Download Models", systemImage: "arrow.down.circle.fill")
                 }
+                Button {
+                    showModelPicker = true
+                } label: {
+                    Label("Import from Files", systemImage: "folder.badge.plus")
+                }
+                .disabled(importing != nil)
+                Button {
+                    linkText = UIPasteboard.general.string?.hasPrefix("http") == true ? (UIPasteboard.general.string ?? "") : ""
+                    showLinkSheet = true
+                } label: {
+                    Label("Download from Link", systemImage: "link.badge.plus")
+                }
+                if let importing {
+                    HStack {
+                        ProgressView().controlSize(.small)
+                        Text("Importing \(importing)…").foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
             } footer: {
-                Text("Search GGUF models on Hugging Face or ModelScope. Small quantized models (1–4B parameters, Q4_K_M) run best on a phone.")
+                Text("Search GGUF models on Hugging Face or ModelScope, import a .gguf file from Files (iCloud Drive, other apps, USB drives, network shares), or paste a direct download link. Small quantized models (1–4B parameters, Q4_K_M) run best on a phone.")
             }
             settingsSection
         }
@@ -72,10 +97,45 @@ struct LocalModelsView: View {
                 Text("\(m.displayName) (\(LocalModelFormat.bytes(m.sizeBytes))) will be removed from this device.")
             }
         }
+        .sheet(isPresented: $showModelPicker) {
+            GGUFFilePicker(onPick: { url in
+                showModelPicker = false
+                runImport(url.lastPathComponent) { try await downloads.importModel(from: url) }
+            }, onCancel: { showModelPicker = false })
+            .ignoresSafeArea()
+        }
+        .sheet(item: $projectorTarget) { model in
+            GGUFFilePicker(onPick: { url in
+                projectorTarget = nil
+                runImport(url.lastPathComponent) { try await downloads.importProjector(from: url, for: model.id) }
+            }, onCancel: { projectorTarget = nil })
+            .ignoresSafeArea()
+        }
+        .alert("Download from Link", isPresented: $showLinkSheet) {
+            TextField("https://…/model.gguf", text: $linkText)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Button("Download") {
+                do { try downloads.startLinkDownload(linkText) }
+                catch { errorMessage = error.localizedDescription }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Paste a direct link to a .gguf file. Hugging Face and ModelScope file pages work too.")
+        }
         .alert("Error", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
+        }
+    }
+
+    private func runImport(_ name: String, _ work: @escaping () async throws -> Void) {
+        importing = name
+        Task { @MainActor in
+            do { try await work() }
+            catch { errorMessage = error.localizedDescription }
+            importing = nil
         }
     }
 
@@ -117,6 +177,13 @@ struct LocalModelsView: View {
                             }
                         }
                         .contextMenu {
+                            if !model.supportsVision {
+                                Button {
+                                    projectorTarget = model
+                                } label: {
+                                    Label("Add Vision Projector from Files", systemImage: "photo.badge.plus")
+                                }
+                            }
                             Button(role: .destructive) { pendingDelete = model } label: {
                                 Label("Delete", systemImage: "trash")
                             }
@@ -301,5 +368,46 @@ struct LocalModelBadge: View {
             .padding(.vertical, 1)
             .background(tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
             .foregroundStyle(tint)
+    }
+}
+
+
+// MARK: - File picker
+
+/// Picks a .gguf file from anywhere the Files app can reach. Opened in place;
+/// the import copies it with the security scope held.
+struct GGUFFilePicker: UIViewControllerRepresentable {
+    let onPick: (URL) -> Void
+    var onCancel: () -> Void = {}
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        var types: [UTType] = [.data, .item]
+        if let gguf = UTType(filenameExtension: "gguf") { types.insert(gguf, at: 0) }
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types)
+        picker.delegate = context.coordinator
+        picker.allowsMultipleSelection = false
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick, onCancel: onCancel) }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+        let onCancel: () -> Void
+        init(onPick: @escaping (URL) -> Void, onCancel: @escaping () -> Void) {
+            self.onPick = onPick
+            self.onCancel = onCancel
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { onCancel(); return }
+            onPick(url)
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancel()
+        }
     }
 }

@@ -26,7 +26,7 @@ struct LocalModelBrowserView: View {
         List {
             Section {
                 Picker("Source", selection: $sourceRaw) {
-                    ForEach(LocalModelSource.allCases) { s in
+                    ForEach(LocalModelSource.hubs) { s in
                         Text(s.displayName).tag(s.rawValue)
                     }
                 }

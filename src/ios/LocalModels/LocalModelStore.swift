@@ -25,13 +25,23 @@ import Foundation
 enum LocalModelSource: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
     case huggingFace
     case modelScope
+    /// Copied in from the Files app (any location, including iCloud Drive,
+    /// other apps' folders, USB drives and network shares).
+    case imported
+    /// Downloaded from a direct link the user pasted.
+    case url
 
     var id: String { rawValue }
+
+    /// Sources that can be searched and browsed.
+    static let hubs: [LocalModelSource] = [.huggingFace, .modelScope]
 
     var displayName: String {
         switch self {
         case .huggingFace: return "Hugging Face"
         case .modelScope: return "ModelScope"
+        case .imported: return AppLocalized("Imported")
+        case .url: return AppLocalized("Link")
         }
     }
 }

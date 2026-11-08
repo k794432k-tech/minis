@@ -90,6 +90,7 @@ enum LocalModelHub {
         switch source {
         case .huggingFace: return try await searchHuggingFace(q)
         case .modelScope: return try await searchModelScope(q)
+        case .imported, .url: return []
         }
     }
 
@@ -167,6 +168,7 @@ enum LocalModelHub {
         switch source {
         case .huggingFace: files = try await huggingFaceFiles(repo)
         case .modelScope: files = try await modelScopeFiles(repo)
+        case .imported, .url: files = []
         }
         let gguf = files.filter { $0.path.lowercased().hasSuffix(".gguf") }
         let isProjector: (HubFile) -> Bool = {
@@ -256,7 +258,37 @@ enum LocalModelHub {
                 URLQueryItem(name: "FilePath", value: path),
             ]
             return comps?.url
+        case .imported:
+            return nil
+        case .url:
+            // For link downloads the "path" is the full URL.
+            return URL(string: path)
         }
+    }
+
+    /// Normalizes a pasted link to a direct file URL: Hugging Face / hf-mirror
+    /// "blob" pages become "resolve" downloads, ModelScope file pages become
+    /// the file API.
+    static func directDownloadURL(from raw: String) -> URL? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        if !text.lowercased().hasPrefix("http") { text = "https://" + text }
+        guard var comps = URLComponents(string: text), let host = comps.host?.lowercased() else { return nil }
+        if host.hasSuffix("huggingface.co") || host.hasSuffix("hf-mirror.com") {
+            comps.path = comps.path.replacingOccurrences(of: "/blob/", with: "/resolve/")
+        }
+        if host.hasSuffix("modelscope.cn"),
+           let r = comps.path.range(of: #"^/models/([^/]+/[^/]+)/(?:file/view|resolve)/[^/]+/(.+)$"#, options: .regularExpression) {
+            let parts = comps.path[r].split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            // /models/{owner}/{name}/file/view/{rev}/{path…}  or  /models/{owner}/{name}/resolve/{rev}/{path…}
+            let start = parts.count > 3 && parts[3] == "file" ? 6 : 5
+            if parts.count > start {
+                let repo = parts[1] + "/" + parts[2]
+                let path = parts[start...].joined(separator: "/")
+                return downloadURL(repo: repo, path: path, source: .modelScope)
+            }
+        }
+        return comps.url
     }
 
     /// Web page for a repo, for "open in browser".
@@ -264,6 +296,7 @@ enum LocalModelHub {
         switch source {
         case .huggingFace: return URL(string: "\(LocalModelSettings.huggingFaceEndpoint)/\(encodePath(repo))")
         case .modelScope: return URL(string: "\(modelScopeHost)/models/\(encodePath(repo))")
+        case .imported, .url: return nil
         }
     }
 

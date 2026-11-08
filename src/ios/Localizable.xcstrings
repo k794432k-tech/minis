@@ -284652,6 +284652,278 @@
           }
         }
       }
+    },
+    "Import from Files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从文件导入"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從檔案匯入"
+          }
+        }
+      }
+    },
+    "Download from Link" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从链接下载"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從連結下載"
+          }
+        }
+      }
+    },
+    "Importing %@…" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在导入 %@…"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在匯入 %@…"
+          }
+        }
+      }
+    },
+    "Search GGUF models on Hugging Face or ModelScope, import a .gguf file from Files (iCloud Drive, other apps, USB drives, network shares), or paste a direct download link. Small quantized models (1–4B parameters, Q4_K_M) run best on a phone." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可以在 Hugging Face 或 ModelScope 上搜索 GGUF 模型，也可以从“文件”导入 .gguf 文件（iCloud 云盘、其他 App、U 盘、网络共享），或者粘贴直接下载链接。小的量化模型（1–4B 参数、Q4_K_M）在手机上运行效果最好。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可以在 Hugging Face 或 ModelScope 上搜尋 GGUF 模型，也可以從「檔案」匯入 .gguf 檔（iCloud 雲碟、其他 App、隨身碟、網路共享），或貼上直接下載連結。小型量化模型（1–4B 參數、Q4_K_M）在手機上執行效果最好。"
+          }
+        }
+      }
+    },
+    "Add Vision Projector from Files" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "从文件添加视觉投影文件"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "從檔案新增視覺投影檔"
+          }
+        }
+      }
+    },
+    "Paste a direct link to a .gguf file. Hugging Face and ModelScope file pages work too." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "粘贴 .gguf 文件的直接下载链接。Hugging Face 和 ModelScope 的文件页面链接也可以。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "貼上 .gguf 檔的直接下載連結。Hugging Face 和 ModelScope 的檔案頁面連結也可以。"
+          }
+        }
+      }
+    },
+    "Imported" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已导入"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已匯入"
+          }
+        }
+      }
+    },
+    "Link" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "链接"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "連結"
+          }
+        }
+      }
+    },
+    "Only .gguf model files can be imported." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只能导入 .gguf 模型文件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "只能匯入 .gguf 模型檔。"
+          }
+        }
+      }
+    },
+    "That file is not a GGUF model." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个文件不是 GGUF 模型。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此檔案不是 GGUF 模型。"
+          }
+        }
+      }
+    },
+    "This link is a vision projector (mmproj). Download the model first, then add the projector from the model's menu." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个链接是视觉投影文件（mmproj）。请先下载模型，再从模型的菜单里添加投影文件。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此連結是視覺投影檔（mmproj）。請先下載模型，再從模型的選單中新增投影檔。"
+          }
+        }
+      }
+    },
+    "Generating… %llds" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生成中… %lld 秒"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "生成中… %lld 秒"
+          }
+        }
+      }
+    },
+    "In Memory" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在内存中"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在記憶體中"
+          }
+        }
+      }
+    },
+    "Nothing loaded" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未加载"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未載入"
+          }
+        }
+      }
+    },
+    "Model unloaded. It loads again the next time a chat uses it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型已卸载。下次有对话用到它时会重新加载。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模型已卸載。下次有對話用到它時會重新載入。"
+          }
+        }
+      }
+    },
+    "Compact Prompt (Small Models)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "精简提示词（小模型）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "精簡提示詞（小模型）"
+          }
+        }
+      }
+    },
+    "Compact Prompt replaces the app's long agent instructions (over 10K tokens) with a short one and sends no tools, so small models answer normally; turn it off only for capable models (7B+) if you want them to use tools. A longer context keeps more history but uses more memory. Use hf-mirror.com if huggingface.co is unreachable." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "精简提示词会把 App 很长的 Agent 指令（超过 1 万 token）换成简短版本，并且不发送工具，小模型才能正常回答；只有能力较强的模型（7B 以上）需要用工具时才关掉。上下文越长能记住的历史越多，但更占内存。访问不了 huggingface.co 时请改用 hf-mirror.com。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "精簡提示詞會把 App 很長的 Agent 指令（超過 1 萬 token）換成簡短版本，並且不傳送工具，小模型才能正常回答；只有能力較強的模型（7B 以上）需要用工具時才關閉。上下文越長能記住的歷史越多，但更佔記憶體。無法連上 huggingface.co 時請改用 hf-mirror.com。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
