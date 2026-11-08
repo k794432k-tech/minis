@@ -27,6 +27,10 @@ on:
         description: "llama.cpp release tag for the on-device model runtime"
         type: string
         default: b11669
+      release_tag:
+        description: "Publish a GitHub Release with this tag (e.g. v1.15.0). Leave empty to only build."
+        type: string
+        default: ""
   push:
     tags:
       - "v*"
@@ -353,9 +357,12 @@ jobs:
           retention-days: 14
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Minis ${{ inputs.release_tag || github.ref_name }}
           files: |
             out/Minis-unsigned.ipa
             out/Minis-trollstore.tipa
