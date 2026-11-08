@@ -126,7 +126,7 @@ final class LlamaEngine: @unchecked Sendable {
         -> AsyncThrowingStream<LlamaGenerationEvent, Error>
     {
         AsyncThrowingStream { continuation in
-            let cancelFlag = CancelFlag()
+            let cancelFlag = LlamaCancelFlag()
             continuation.onTermination = { _ in cancelFlag.cancel() }
             queue.async {
                 do {
@@ -324,7 +324,7 @@ final class LlamaEngine: @unchecked Sendable {
 
     // MARK: Generation (queue)
 
-    private func run(prompt: String, sampling: LlamaSampling, cancel: CancelFlag,
+    private func run(prompt: String, sampling: LlamaSampling, cancel: LlamaCancelFlag,
                      emit: (LlamaGenerationEvent) -> Void) throws {
         guard let context, let vocab else { throw LlamaEngineError.contextCreateFailed }
         let nCtx = Int(llama_n_ctx(context))
@@ -393,7 +393,7 @@ final class LlamaEngine: @unchecked Sendable {
 
     // MARK: Multimodal generation (queue)
 
-    private func runMultimodal(prompt: String, images: [Data], sampling: LlamaSampling, cancel: CancelFlag,
+    private func runMultimodal(prompt: String, images: [Data], sampling: LlamaSampling, cancel: LlamaCancelFlag,
                                emit: (LlamaGenerationEvent) -> Void) throws {
         guard let context, let vocab else { throw LlamaEngineError.contextCreateFailed }
         guard let mtmd = mtmdContext else { throw LlamaEngineError.visionUnavailable }
@@ -511,7 +511,7 @@ final class LlamaEngine: @unchecked Sendable {
 
     /// Samples up to `maxNew` tokens. `decode` feeds each sampled token back
     /// into the context and returns llama_decode's result.
-    private func sampleLoop(sampling: LlamaSampling, maxNew: Int, cancel: CancelFlag,
+    private func sampleLoop(sampling: LlamaSampling, maxNew: Int, cancel: LlamaCancelFlag,
                             emit: (LlamaGenerationEvent) -> Void,
                             decode: (llama_token) -> Int32) throws {
         guard let context, let vocab else { throw LlamaEngineError.contextCreateFailed }
@@ -650,7 +650,7 @@ final class LlamaEngine: @unchecked Sendable {
 }
 
 /// Cancellation flag shared between the async consumer and the engine queue.
-final class CancelFlag: @unchecked Sendable {
+final class LlamaCancelFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var cancelled = false
     var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }

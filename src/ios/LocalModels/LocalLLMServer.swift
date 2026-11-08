@@ -103,18 +103,18 @@ final class LocalLLMServer: @unchecked Sendable {
 
     private func accept(_ connection: NWConnection) {
         connection.start(queue: queue)
-        HTTPRequestReader(connection: connection).read { [weak self] request in
+        LocalHTTPRequestReader(connection: connection).read { [weak self] request in
             guard let self else { connection.cancel(); return }
             guard let request else {
-                HTTPResponder(connection: connection).sendJSON(status: 400, ["error": ["message": "Malformed request", "type": "invalid_request_error"]])
+                LocalHTTPResponder(connection: connection).sendJSON(status: 400, ["error": ["message": "Malformed request", "type": "invalid_request_error"]])
                 return
             }
             self.route(request, connection: connection)
         }
     }
 
-    private func route(_ request: HTTPRequest, connection: NWConnection) {
-        let responder = HTTPResponder(connection: connection)
+    private func route(_ request: LocalHTTPRequest, connection: NWConnection) {
+        let responder = LocalHTTPResponder(connection: connection)
         let path = request.path.split(separator: "?").first.map(String.init) ?? request.path
 
         guard LocalModelProviderRegistrar.isAuthorized(request.headers["authorization"]) else {
@@ -153,7 +153,7 @@ final class LocalLLMServer: @unchecked Sendable {
 
     // MARK: Chat completions
 
-    private func chatCompletions(_ request: HTTPRequest, responder: HTTPResponder) async {
+    private func chatCompletions(_ request: LocalHTTPRequest, responder: LocalHTTPResponder) async {
         guard let body = try? JSONSerialization.jsonObject(with: request.body) as? [String: Any] else {
             responder.sendJSON(status: 400, ["error": ["message": "Request body is not valid JSON", "type": "invalid_request_error"]])
             return
@@ -211,7 +211,7 @@ final class LocalLLMServer: @unchecked Sendable {
         }
     }
 
-    private func streamResponse(events: AsyncThrowingStream<LlamaGenerationEvent, Error>, responder: HTTPResponder,
+    private func streamResponse(events: AsyncThrowingStream<LlamaGenerationEvent, Error>, responder: LocalHTTPResponder,
                                 id: String, created: Int, modelId: String, parseTools: Bool,
                                 stops: [String], includeUsage: Bool) async {
         responder.beginEventStream()
@@ -288,7 +288,7 @@ final class LocalLLMServer: @unchecked Sendable {
         }
     }
 
-    private func jsonResponse(events: AsyncThrowingStream<LlamaGenerationEvent, Error>, responder: HTTPResponder,
+    private func jsonResponse(events: AsyncThrowingStream<LlamaGenerationEvent, Error>, responder: LocalHTTPResponder,
                               id: String, created: Int, modelId: String, parseTools: Bool, stops: [String]) async {
         var parser = ToolCallStreamParser()
         var stopFilter = StopStringFilter(stops: stops)
@@ -381,7 +381,7 @@ struct StopStringFilter {
 
 // MARK: - Minimal HTTP/1.1
 
-struct HTTPRequest {
+struct LocalHTTPRequest {
     let method: String
     let path: String
     /// Lower-cased header names.
@@ -390,14 +390,14 @@ struct HTTPRequest {
 }
 
 /// Reads one request (headers + Content-Length body) from a connection.
-private final class HTTPRequestReader {
+private final class LocalHTTPRequestReader {
     private static let maxBodyBytes = 64 * 1024 * 1024
     private let connection: NWConnection
     private var data = Data()
 
     init(connection: NWConnection) { self.connection = connection }
 
-    func read(_ completion: @escaping (HTTPRequest?) -> Void) {
+    func read(_ completion: @escaping (LocalHTTPRequest?) -> Void) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [self] chunk, _, isComplete, error in
             if let chunk { data.append(chunk) }
             if let request = parse() {
@@ -413,7 +413,7 @@ private final class HTTPRequestReader {
     }
 
     /// Returns the request once headers and the full body have arrived.
-    private func parse() -> HTTPRequest? {
+    private func parse() -> LocalHTTPRequest? {
         let separator = Data("\r\n\r\n".utf8)
         guard let headerEnd = data.range(of: separator) else { return nil }
         guard let head = String(data: data[data.startIndex..<headerEnd.lowerBound], encoding: .utf8) else { return nil }
@@ -432,7 +432,7 @@ private final class HTTPRequestReader {
         let bodyStart = headerEnd.upperBound
         guard data.count - (bodyStart - data.startIndex) >= length else { return nil }
         let body = data[bodyStart..<(bodyStart + length)]
-        return HTTPRequest(method: String(requestLine[0]).uppercased(), path: String(requestLine[1]),
+        return LocalHTTPRequest(method: String(requestLine[0]).uppercased(), path: String(requestLine[1]),
                            headers: headers, body: Data(body))
     }
 }
@@ -440,7 +440,7 @@ private final class HTTPRequestReader {
 /// Writes responses. Streaming responses use a close-delimited body
 /// (`Connection: close`, no Content-Length), which every HTTP/1.1 client
 /// accepts and keeps the server free of chunked encoding.
-final class HTTPResponder: @unchecked Sendable {
+final class LocalHTTPResponder: @unchecked Sendable {
     private let connection: NWConnection
     private let lock = NSLock()
     private var closed = false
