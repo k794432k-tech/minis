@@ -1082,6 +1082,15 @@ final class MessageListViewController: UIViewController {
     var collectionView: UICollectionView!
     var messageListLayout: MessageListLayout!
 
+    /// Resigns the keyboard when it belongs to a text input OUTSIDE the
+    /// message list (the composer), leaving text selection inside messages
+    /// alone.
+    @objc private func dismissComposerKeyboard() {
+        guard let responder = KeyboardFirstResponder.current() as? UIView,
+              !responder.isDescendant(of: collectionView) else { return }
+        responder.resignFirstResponder()
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .clear
@@ -1094,6 +1103,11 @@ final class MessageListViewController: UIViewController {
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         collectionView.backgroundColor = .clear
         collectionView.keyboardDismissMode = .onDrag
+        // Tapping the conversation hides the composer keyboard (dragging
+        // already did). Touches still reach the cells.
+        let dismissTap = UITapGestureRecognizer(target: self, action: #selector(dismissComposerKeyboard))
+        dismissTap.cancelsTouchesInView = false
+        collectionView.addGestureRecognizer(dismissTap)
         collectionView.alwaysBounceVertical = true
         collectionView.contentInsetAdjustmentBehavior = .automatic
         // [T-chat-statusbar-scrolltotop-mistap] `scrollsToTop` is left at its
@@ -1235,4 +1249,25 @@ final class CellStateBridgeV2: ObservableObject {
     @Published var usageContentVisible: Bool = false
     /// Compact summary — presented from overlay outside cell tree for animation.
     var onShowCompactSummary: ((String) -> Void)?
+}
+
+
+/// Finds the current first responder (the standard sendAction trick).
+@MainActor
+enum KeyboardFirstResponder {
+    private weak static var found: UIResponder?
+
+    static func current() -> UIResponder? {
+        found = nil
+        UIApplication.shared.sendAction(#selector(UIResponder.minis_reportFirstResponder), to: nil, from: nil, for: nil)
+        return found
+    }
+
+    fileprivate static func report(_ responder: UIResponder) { found = responder }
+}
+
+extension UIResponder {
+    @objc fileprivate func minis_reportFirstResponder() {
+        KeyboardFirstResponder.report(self)
+    }
 }
