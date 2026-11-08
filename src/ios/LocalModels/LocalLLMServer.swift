@@ -168,14 +168,15 @@ final class LocalLLMServer: @unchecked Sendable {
         let stream = body["stream"] as? Bool ?? false
         let includeUsage = ((body["stream_options"] as? [String: Any])?["include_usage"] as? Bool) ?? false
         let tools = (body["tools"] as? [[String: Any]]) ?? []
-        let useTools = LocalModelSettings.toolCalling && !tools.isEmpty
+        let compact = LocalModelSettings.compactPrompt
+        let useTools = !compact && LocalModelSettings.toolCalling && !tools.isEmpty
             && (body["tool_choice"] as? String) != "none"
         let vision = model.supportsVision
             ? LocalChatFormatter.Vision(marker: LlamaEngine.mediaMarker, maxImages: 4)
             : nil
         let prompt = LocalChatFormatter.prompt(
             from: (body["messages"] as? [[String: Any]]) ?? [],
-            tools: tools, includeTools: useTools, vision: vision
+            tools: tools, includeTools: useTools, vision: vision, compactSystem: compact
         )
 
         let requestedMax = (body["max_completion_tokens"] as? Int) ?? (body["max_tokens"] as? Int)
@@ -240,6 +241,7 @@ final class LocalLLMServer: @unchecked Sendable {
                 case .text(let text):
                     if !text.isEmpty { responder.sendEvent(chunk(delta: ["content": text])) }
                 case .toolCall(let name, let arguments):
+                    guard parseTools else { continue }
                     let call: [String: Any] = [
                         "index": toolIndex,
                         "id": "call_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(24))",
@@ -260,7 +262,9 @@ final class LocalLLMServer: @unchecked Sendable {
                     promptTokens = p
                 case .text(let piece):
                     let (visible, stopped) = stopFilter.feed(piece)
-                    if parseTools { emit(parser.feed(visible)) } else if !visible.isEmpty { emit([.text(visible)]) }
+                    // The parser also runs without tools so stray tool-call
+                    // markup from small models is hidden instead of shown.
+                    emit(parser.feed(visible))
                     if stopped { break generation }
                 case .finished(let c, let limit):
                     completionTokens = c
@@ -268,8 +272,8 @@ final class LocalLLMServer: @unchecked Sendable {
                 }
             }
             let tail = stopFilter.finish()
-            if parseTools { emit(parser.feed(tail)); emit(parser.finish()) } else if !tail.isEmpty { emit([.text(tail)]) }
-            let finish = parser.sawToolCall ? "tool_calls" : (hitLimit ? "length" : "stop")
+            emit(parser.feed(tail)); emit(parser.finish())
+            let finish = (parseTools && parser.sawToolCall) ? "tool_calls" : (hitLimit ? "length" : "stop")
             responder.sendEvent(chunk(delta: [:], finish: finish))
             if includeUsage {
                 responder.sendEvent([
@@ -303,6 +307,7 @@ final class LocalLLMServer: @unchecked Sendable {
                 switch output {
                 case .text(let t): text += t
                 case .toolCall(let name, let arguments):
+                    guard parseTools else { continue }
                     toolCalls.append([
                         "id": "call_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(24))",
                         "type": "function",
@@ -318,7 +323,7 @@ final class LocalLLMServer: @unchecked Sendable {
                 case .promptEvaluated(let p, _): promptTokens = p
                 case .text(let piece):
                     let (visible, stopped) = stopFilter.feed(piece)
-                    if parseTools { collect(parser.feed(visible)) } else { text += visible }
+                    collect(parser.feed(visible))
                     if stopped { break generation }
                 case .finished(let c, let limit):
                     completionTokens = c
@@ -326,7 +331,7 @@ final class LocalLLMServer: @unchecked Sendable {
                 }
             }
             let tail = stopFilter.finish()
-            if parseTools { collect(parser.feed(tail)); collect(parser.finish()) } else { text += tail }
+            collect(parser.feed(tail)); collect(parser.finish())
         } catch {
             responder.sendJSON(status: 500, ["error": ["message": error.localizedDescription, "type": "server_error"]])
             return

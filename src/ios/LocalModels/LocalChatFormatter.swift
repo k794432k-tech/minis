@@ -37,7 +37,7 @@ enum LocalChatFormatter {
     /// With `vision`, image parts become markers and their bytes are returned
     /// in `images`; without it they become a short text note.
     static func prompt(from openAIMessages: [[String: Any]], tools: [[String: Any]], includeTools: Bool,
-                       vision: Vision?) -> Prompt {
+                       vision: Vision?, compactSystem: Bool = false) -> Prompt {
         // Pick which image parts survive: the last `maxImages` in the conversation.
         var keepImageOrdinals = Set<Int>()
         if let vision {
@@ -72,7 +72,8 @@ enum LocalChatFormatter {
             }
             return pieces.filter { !$0.isEmpty }.joined(separator: "\n")
         }
-        let messages = build(openAIMessages, tools: tools, includeTools: includeTools, content: content)
+        let messages = build(openAIMessages, tools: tools, includeTools: includeTools, content: content,
+                             compactSystem: compactSystem)
         return Prompt(messages: messages, images: images)
     }
 
@@ -103,8 +104,36 @@ enum LocalChatFormatter {
         return nil
     }
 
+    /// Where the app's system prompt moves from identity (name, soul,
+    /// persona, memories) to agent and tool instructions.
+    private static let agentRulesMarker = "You should proactively use shell commands"
+
+    /// A short system prompt for small local models: the identity part of
+    /// the app's prompt (so names, souls and personas still apply) plus a few
+    /// plain instructions, without the tool and workflow rules.
+    static func compactSystemPrompt(from full: String) -> String {
+        var identity = full
+        if let r = full.range(of: agentRulesMarker) {
+            identity = String(full[..<r.lowerBound])
+        }
+        // Drop the SOUL.md editing hint, which refers to tools.
+        if let r = identity.range(of: "\n---\nSOUL.md fields") {
+            identity = String(identity[..<r.lowerBound])
+        }
+        identity = identity
+            .replacingOccurrences(of: "with a fully functional iSH Linux shell (Alpine Linux, aarch64)", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if identity.count > 4000 { identity = String(identity.prefix(4000)) }
+        let rules = """
+        You are running fully offline on the user's iPhone as a small on-device model.
+        Answer the user directly in plain text, in the language they use. Be concise and helpful.
+        You have no tools in this mode: never output XML, function-call or tool-call markup; just reply.
+        """
+        return identity.isEmpty ? rules : identity + "\n\n" + rules
+    }
+
     private static func build(_ openAIMessages: [[String: Any]], tools: [[String: Any]], includeTools: Bool,
-                              content: (Any?) -> String) -> [LlamaChatMessage] {
+                              content: (Any?) -> String, compactSystem: Bool = false) -> [LlamaChatMessage] {
         var out: [LlamaChatMessage] = []
         var systemParts: [String] = []
         var pendingToolResponses: [String] = []
@@ -141,6 +170,9 @@ enum LocalChatFormatter {
         }
         flushToolResponses()
 
+        if compactSystem {
+            systemParts = [compactSystemPrompt(from: systemParts.joined(separator: "\n\n"))]
+        }
         if includeTools && !tools.isEmpty {
             systemParts.append(toolsPrompt(tools))
         }
@@ -237,66 +269,84 @@ enum LocalChatFormatter {
 
 // MARK: - Streaming tool-call parser
 
-/// Splits generated text into plain content and `<tool_call>` blocks while it
+/// Splits generated text into plain content and tool-call blocks while it
 /// streams, holding back only as many characters as could be the start of an
-/// opening tag.
+/// opening tag. Besides the Hermes/Qwen `<tool_call>{json}</tool_call>`
+/// format it accepts the other markups small models commonly emit:
+///   <invoke name="x"><parameter name="k">v</parameter></invoke>   (optionally in <function_calls>)
+///   <function=x><parameter=k>v</parameter></function>
+/// Bare `<function_calls>` wrappers are dropped from the visible text.
 struct ToolCallStreamParser {
     enum Output {
         case text(String)
         case toolCall(name: String, arguments: String)
     }
 
-    private static let open = "<tool_call>"
-    private static let close = "</tool_call>"
+    private struct Tag {
+        let open: String
+        let close: String
+    }
+
+    private static let tags = [
+        Tag(open: "<tool_call>", close: "</tool_call>"),
+        Tag(open: "<invoke", close: "</invoke>"),
+        Tag(open: "<function=", close: "</function>"),
+    ]
+    private static let dropped = ["<function_calls>", "</function_calls>"]
 
     private var buffer = ""
-    private var insideCall = false
+    private var current: Tag?
     private var callBody = ""
     private(set) var sawToolCall = false
 
     mutating func feed(_ chunk: String) -> [Output] {
         buffer += chunk
+        for d in Self.dropped where buffer.contains(d) {
+            buffer = buffer.replacingOccurrences(of: d, with: "")
+        }
         var outputs: [Output] = []
         while true {
-            if insideCall {
-                if let r = buffer.range(of: Self.close) {
+            if let tag = current {
+                if let r = buffer.range(of: tag.close) {
                     callBody += buffer[..<r.lowerBound]
                     buffer = String(buffer[r.upperBound...])
-                    insideCall = false
-                    outputs.append(contentsOf: finishCall())
+                    current = nil
+                    outputs.append(contentsOf: finishCall(tag))
                     continue
                 }
-                // Keep a possible partial closing tag in the buffer.
-                let keep = Self.partialSuffixLength(buffer, of: Self.close)
+                let keep = Self.partialSuffixLength(buffer, of: tag.close)
                 callBody += buffer.dropLast(keep)
                 buffer = String(buffer.suffix(keep))
                 return outputs
-            } else {
-                if let r = buffer.range(of: Self.open) {
-                    let before = String(buffer[..<r.lowerBound])
-                    if !before.isEmpty { outputs.append(.text(before)) }
-                    buffer = String(buffer[r.upperBound...])
-                    insideCall = true
-                    callBody = ""
-                    continue
-                }
-                let keep = Self.partialSuffixLength(buffer, of: Self.open)
-                let emit = String(buffer.dropLast(keep))
-                if !emit.isEmpty { outputs.append(.text(emit)) }
-                buffer = String(buffer.suffix(keep))
-                return outputs
             }
+            // Earliest opening tag in the buffer.
+            let found = Self.tags.compactMap { tag in buffer.range(of: tag.open).map { (tag, $0) } }
+                .min { $0.1.lowerBound < $1.1.lowerBound }
+            if let (tag, r) = found {
+                let before = String(buffer[..<r.lowerBound])
+                if !before.isEmpty { outputs.append(.text(before)) }
+                buffer = String(buffer[r.upperBound...])
+                current = tag
+                callBody = ""
+                continue
+            }
+            let keep = (Self.tags.map(\.open) + Self.dropped)
+                .map { Self.partialSuffixLength(buffer, of: $0) }.max() ?? 0
+            let emit = String(buffer.dropLast(keep))
+            if !emit.isEmpty { outputs.append(.text(emit)) }
+            buffer = String(buffer.suffix(keep))
+            return outputs
         }
     }
 
     /// Flushes whatever is left at the end of generation.
     mutating func finish() -> [Output] {
         var outputs: [Output] = []
-        if insideCall {
+        if let tag = current {
             callBody += buffer
             buffer = ""
-            insideCall = false
-            outputs.append(contentsOf: finishCall())
+            current = nil
+            outputs.append(contentsOf: finishCall(tag))
         } else if !buffer.isEmpty {
             outputs.append(.text(buffer))
             buffer = ""
@@ -304,15 +354,74 @@ struct ToolCallStreamParser {
         return outputs
     }
 
-    private mutating func finishCall() -> [Output] {
-        let body = callBody.trimmingCharacters(in: .whitespacesAndNewlines)
+    private mutating func finishCall(_ tag: Tag) -> [Output] {
+        let body = callBody
         callBody = ""
-        guard let parsed = Self.parseCall(body) else {
-            // Not valid JSON: show it as text rather than losing it.
-            return [.text("<tool_call>\n\(body)\n</tool_call>")]
+        let parsed: (name: String, arguments: String)?
+        switch tag.open {
+        case "<invoke": parsed = Self.parseInvoke(body)
+        case "<function=": parsed = Self.parseFunctionEquals(body)
+        default: parsed = Self.parseCall(body.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        guard let parsed else {
+            // Not parseable: drop the markup rather than show it to the user.
+            return []
         }
         sawToolCall = true
         return [.toolCall(name: parsed.name, arguments: parsed.arguments)]
+    }
+
+    /// ` name="x"><parameter name="k">v</parameter>…`
+    static func parseInvoke(_ body: String) -> (name: String, arguments: String)? {
+        guard let name = firstMatch(#"^\s*name\s*=\s*"([^"]+)""#, in: body) else { return nil }
+        let params = allMatches(#"(?s)<parameter\s+name\s*=\s*"([^"]+)"\s*>(.*?)</parameter>"#, in: body)
+        return (name, encodeArguments(params))
+    }
+
+    /// `x>{json}` or `x><parameter=k>v</parameter>…`
+    static func parseFunctionEquals(_ body: String) -> (name: String, arguments: String)? {
+        guard let close = body.firstIndex(of: ">") else { return nil }
+        let name = body[..<close].trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return nil }
+        let rest = String(body[body.index(after: close)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if rest.hasPrefix("{"), let data = rest.data(using: .utf8),
+           (try? JSONSerialization.jsonObject(with: data)) != nil {
+            return (name, rest)
+        }
+        let params = allMatches(#"(?s)<parameter\s*=\s*([^>\s]+)\s*>(.*?)</parameter>"#, in: rest)
+        return (name, encodeArguments(params))
+    }
+
+    private static func encodeArguments(_ params: [(String, String)]) -> String {
+        var args: [String: Any] = [:]
+        for (key, raw) in params {
+            let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let data = value.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]),
+               !(json is String) {
+                args[key] = json
+            } else {
+                args[key] = value
+            }
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: args, options: [.withoutEscapingSlashes]),
+              let json = String(data: data, encoding: .utf8) else { return "{}" }
+        return json
+    }
+
+    private static func firstMatch(_ pattern: String, in text: String) -> String? {
+        guard let re = try? NSRegularExpression(pattern: pattern),
+              let m = re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let r = Range(m.range(at: 1), in: text) else { return nil }
+        return String(text[r])
+    }
+
+    private static func allMatches(_ pattern: String, in text: String) -> [(String, String)] {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        return re.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { m in
+            guard let k = Range(m.range(at: 1), in: text), let v = Range(m.range(at: 2), in: text) else { return nil }
+            return (String(text[k]), String(text[v]))
+        }
     }
 
     static func parseCall(_ body: String) -> (name: String, arguments: String)? {

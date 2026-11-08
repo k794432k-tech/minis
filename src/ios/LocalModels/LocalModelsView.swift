@@ -18,7 +18,10 @@ struct LocalModelsView: View {
     @AppStorage(LocalModelSettings.toolCallingKey) private var toolCalling = true
     @AppStorage(LocalModelSettings.huggingFaceEndpointKey) private var hfEndpoint = LocalModelSettings.defaultHuggingFaceEndpoint
 
+    @AppStorage(LocalModelSettings.compactPromptKey) private var compactPrompt = true
     @State private var serverRunning = LocalLLMServer.shared.isRunning
+    @State private var loadedName: String? = LlamaEngine.shared.loadedPath.map { ($0 as NSString).lastPathComponent }
+    @State private var unloadMessage: String?
     @State private var pendingDelete: LocalModelFile?
     @State private var errorMessage: String?
 
@@ -50,6 +53,7 @@ struct LocalModelsView: View {
             // The listener state lives off the main actor; poll it lightly.
             while !Task.isCancelled {
                 serverRunning = LocalLLMServer.shared.isRunning
+                loadedName = LlamaEngine.shared.loadedPath.map { ($0 as NSString).lastPathComponent }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
@@ -155,18 +159,37 @@ struct LocalModelsView: View {
                 Slider(value: $temperature, in: 0...1.5, step: 0.05)
             }
             Toggle("Metal GPU Acceleration", isOn: $gpuOffload)
+            Toggle("Compact Prompt (Small Models)", isOn: $compactPrompt)
             Toggle("Tool Calling", isOn: $toolCalling)
+                .disabled(compactPrompt)
             Picker("Hugging Face Endpoint", selection: $hfEndpoint) {
                 Text("huggingface.co").tag(LocalModelSettings.defaultHuggingFaceEndpoint)
                 Text("hf-mirror.com").tag(LocalModelSettings.huggingFaceMirrorEndpoint)
             }
+            HStack {
+                Text("In Memory")
+                Spacer()
+                Text(loadedName ?? AppLocalized("Nothing loaded"))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             Button("Unload Model from Memory") {
-                LlamaEngine.shared.unloadAll()
+                LlamaEngine.shared.unloadAll {
+                    Task { @MainActor in
+                        loadedName = nil
+                        unloadMessage = AppLocalized("Model unloaded. It loads again the next time a chat uses it.")
+                    }
+                }
+            }
+            .disabled(loadedName == nil)
+            if let unloadMessage {
+                Text(unloadMessage).font(.caption).foregroundStyle(.secondary)
             }
         } header: {
             Text("Inference")
         } footer: {
-            Text("A longer context lets the agent keep more history but uses more memory. Tool calling sends the tool list in the prompt, which needs at least 8K context; turn it off for plain chat with small models. Use hf-mirror.com if huggingface.co is unreachable.")
+            Text("Compact Prompt replaces the app's long agent instructions (over 10K tokens) with a short one and sends no tools, so small models answer normally; turn it off only for capable models (7B+) if you want them to use tools. A longer context keeps more history but uses more memory. Use hf-mirror.com if huggingface.co is unreachable.")
         }
     }
 }

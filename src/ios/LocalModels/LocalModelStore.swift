@@ -203,6 +203,7 @@ enum LocalModelSettings {
     static let temperatureKey = "localLLM.temperature"
     static let maxOutputTokensKey = "localLLM.maxOutputTokens"
     static let toolCallingKey = "localLLM.toolCalling"
+    static let compactPromptKey = "localLLM.compactPrompt"
     static let huggingFaceEndpointKey = "localLLM.huggingFaceEndpoint"
 
     static let contextLengthOptions = [2048, 4096, 8192, 16384, 32768]
@@ -229,6 +230,14 @@ enum LocalModelSettings {
     static var maxOutputTokens: Int {
         let v = defaults.integer(forKey: maxOutputTokensKey)
         return v > 0 ? v : 2048
+    }
+
+    /// Replace the app's long agent system prompt (10k+ tokens of tool and
+    /// workflow rules) with a short one and send no tools. Small on-device
+    /// models get lost in the full prompt and start imitating tool-call
+    /// markup instead of answering.
+    static var compactPrompt: Bool {
+        defaults.object(forKey: compactPromptKey) as? Bool ?? true
     }
 
     static var toolCalling: Bool {

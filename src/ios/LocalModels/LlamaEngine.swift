@@ -114,7 +114,28 @@ final class LlamaEngine: @unchecked Sendable {
         return _loadedPath
     }
 
+    /// Cancel flags of requests that are running or waiting for the queue,
+    /// so "unload" can stop them instead of waiting behind them.
+    private let activeLock = NSLock()
+    private var activeFlags: [ObjectIdentifier: LlamaCancelFlag] = [:]
+
     private init() {}
+
+    private func track(_ flag: LlamaCancelFlag) {
+        activeLock.lock(); activeFlags[ObjectIdentifier(flag)] = flag; activeLock.unlock()
+    }
+
+    private func untrack(_ flag: LlamaCancelFlag) {
+        activeLock.lock(); activeFlags[ObjectIdentifier(flag)] = nil; activeLock.unlock()
+    }
+
+    /// Stops every running or queued generation.
+    func cancelAll() {
+        activeLock.lock()
+        let flags = Array(activeFlags.values)
+        activeLock.unlock()
+        flags.forEach { $0.cancel() }
+    }
 
     // MARK: Public API
 
@@ -128,7 +149,14 @@ final class LlamaEngine: @unchecked Sendable {
         AsyncThrowingStream { continuation in
             let cancelFlag = LlamaCancelFlag()
             continuation.onTermination = { _ in cancelFlag.cancel() }
+            track(cancelFlag)
             queue.async {
+                defer { self.untrack(cancelFlag) }
+                // Cancelled while waiting (e.g. "Unload" was tapped): do not load.
+                if cancelFlag.isCancelled {
+                    continuation.finish(throwing: CancellationError())
+                    return
+                }
                 do {
                     try self.ensureLoaded(config)
                     let prompt = try self.applyTemplate(messages)
@@ -165,8 +193,14 @@ final class LlamaEngine: @unchecked Sendable {
         }
     }
 
-    func unloadAll() {
-        queue.async { self.unload() }
+    /// Frees the model and context. Running and queued requests are stopped
+    /// first, so this takes effect right away instead of after them.
+    func unloadAll(completion: (@Sendable () -> Void)? = nil) {
+        cancelAll()
+        queue.async {
+            self.unload()
+            completion?()
+        }
     }
 
     // MARK: Loading (queue)
