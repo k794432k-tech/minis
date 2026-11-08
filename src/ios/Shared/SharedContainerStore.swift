@@ -7,6 +7,28 @@ enum SharedContainerStore {
 
     private static let pendingShareKey = "pendingShare"
 
+    /// The App Group container, or — when the app runs without the App Group
+    /// entitlement (sideloaded with a personal / free signing identity, which
+    /// rewrites or drops `com.apple.security.application-groups`) — a folder in
+    /// the app's own Library. The share extension and Files provider cannot
+    /// see the fallback, but the app itself keeps working instead of crashing
+    /// on a nil container at launch.
+    static var containerURL: URL {
+        let fm = FileManager.default
+        if let url = fm.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) {
+            return url
+        }
+        let fallback = fm.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("AppGroupFallback", isDirectory: true)
+        try? fm.createDirectory(at: fallback, withIntermediateDirectories: true)
+        return fallback
+    }
+
+    /// Whether the real App Group container is available.
+    static var hasAppGroup: Bool {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupID) != nil
+    }
+
     static var sharedDefaults: UserDefaults? {
         UserDefaults(suiteName: appGroupID)
     }

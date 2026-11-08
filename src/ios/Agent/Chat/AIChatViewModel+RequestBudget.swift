@@ -419,18 +419,16 @@ extension AIChatViewModel {
     /// FileProvider extension. Keep ONLY user-facing subdirs (shared, skills,
     /// memory) here — anything else leaks into "On My iPhone → Minis".
     nonisolated static var minisAppGroupRoot: URL {
-        FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: SharedContainerStore.appGroupID
-        )!.appendingPathComponent("MinisFileProvider", isDirectory: true)
+        // [T-sideload-no-app-group] Falls back to app-local storage when the
+        // App Group entitlement is missing instead of crashing.
+        SharedContainerStore.containerURL.appendingPathComponent("MinisFileProvider", isDirectory: true)
     }
 
     /// App Group subdirectory for private metadata that must NOT be exposed
     /// to iOS Files (mounted-folders.json, FileProvider extension logs, etc).
     /// Sibling of `minisAppGroupRoot` inside the same App Group container.
     nonisolated static var minisConfigRoot: URL {
-        let url = FileManager.default.containerURL(
-            forSecurityApplicationGroupIdentifier: SharedContainerStore.appGroupID
-        )!.appendingPathComponent("MinisConfig", isDirectory: true)
+        let url = SharedContainerStore.containerURL.appendingPathComponent("MinisConfig", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
