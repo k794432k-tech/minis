@@ -1314,18 +1314,18 @@ struct AIChatView: View {
                 }
             }
         }
-        .fileImporter(
-            isPresented: $showDocumentPicker,
-            allowedContentTypes: [.image, .pdf, .plainText, .json, .sourceCode, .presentation, .spreadsheet, .data],
-            allowsMultipleSelection: true
-        ) { result in
-            switch result {
-            case .success(let urls):
+        // Files picked through UIKit as copies (see DocumentPickerPresenter):
+        // the SwiftUI .fileImporter could open but not return a pick.
+        .onChange(of: showDocumentPicker) { show in
+            guard show else { return }
+            showDocumentPicker = false
+            DocumentPickerPresenter.present(
+                types: [.image, .pdf, .plainText, .json, .sourceCode, .presentation, .spreadsheet, .data, .item],
+                multiple: true
+            ) { urls in
                 for url in urls {
                     vm.addFileAttachment(from: url)
                 }
-            case .failure(let error):
-                minisLogger.error("File import failed: \(error.localizedDescription)")
             }
         }
         // [T-minisurl-wrong-active-session] A draft opened from the UI has

@@ -185,12 +185,9 @@ final class LocalModelDownloadManager: NSObject, ObservableObject {
     /// Copies a GGUF picked in the Files app into the models folder.
     /// `url` must be readable (security scope handled here).
     func importModel(from url: URL) async throws {
-        let name = url.lastPathComponent
-        guard name.lowercased().hasSuffix(".gguf") else {
-            throw NSError(domain: "LocalModels", code: 3, userInfo: [
-                NSLocalizedDescriptionKey: AppLocalized("Only .gguf model files can be imported."),
-            ])
-        }
+        // Any file name is accepted; the GGUF header check decides.
+        var name = url.lastPathComponent
+        if !name.lowercased().hasSuffix(".gguf") { name += ".gguf" }
         let modelId = LocalModelCatalog.shared.makeUniqueId(for: name)
         let folder = LocalModelPaths.sanitize("imported__\(modelId)")
         let relative = "\(folder)/\(LocalModelPaths.sanitize(name))"
@@ -210,12 +207,9 @@ final class LocalModelDownloadManager: NSObject, ObservableObject {
     /// Adds a vision projector picked in the Files app to an existing model.
     func importProjector(from url: URL, for modelId: String) async throws {
         guard var model = LocalModelCatalog.shared.model(id: modelId) else { return }
-        let name = url.lastPathComponent
-        guard name.lowercased().hasSuffix(".gguf") else {
-            throw NSError(domain: "LocalModels", code: 3, userInfo: [
-                NSLocalizedDescriptionKey: AppLocalized("Only .gguf model files can be imported."),
-            ])
-        }
+        // Any file name is accepted; the GGUF header check decides.
+        var name = url.lastPathComponent
+        if !name.lowercased().hasSuffix(".gguf") { name += ".gguf" }
         let relative = "\(model.folderRelativePath)/mmproj-\(LocalModelPaths.sanitize(name))"
         let dest = LocalModelPaths.modelsDirectory.appendingPathComponent(relative)
         let size = try await Self.copyIn(url, to: dest)
@@ -242,7 +236,14 @@ final class LocalModelDownloadManager: NSObject, ObservableObject {
                 do {
                     LocalModelPaths.ensureDirectory(dest.deletingLastPathComponent())
                     if fm.fileExists(atPath: dest.path) { try fm.removeItem(at: dest) }
-                    try fm.copyItem(at: readURL, to: dest)
+                    // The document picker already copied it into our tmp/:
+                    // move it instead of needing the space twice.
+                    let ours = readURL.path.contains("-Inbox/")
+                        || readURL.standardizedFileURL.path.hasPrefix(fm.temporaryDirectory.standardizedFileURL.path)
+                    if ours, (try? fm.moveItem(at: readURL, to: dest)) != nil {
+                    } else {
+                        try fm.copyItem(at: readURL, to: dest)
+                    }
                 } catch {
                     copyError = error
                 }

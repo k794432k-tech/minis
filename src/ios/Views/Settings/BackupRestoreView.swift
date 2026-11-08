@@ -99,19 +99,6 @@ struct BackupRestoreView: View {
         // silently fail to appear ("tap does nothing"), the same reason the
         // mount screen uses a picker sheet. The picked URL is handed over on
         // the next run-loop tick, after the sheet has left the hierarchy.
-        .sheet(isPresented: $showPicker) {
-            BackupPackagePicker(onPick: { url in
-                logger.info("[Restore] picked \(url.lastPathComponent)")
-                // The picker dismisses itself, which SwiftUI does not see:
-                // reset the binding, or the sheet still counts as presented
-                // and the later "Restore this backup?" alert never appears.
-                showPicker = false
-                DispatchQueue.main.async { load(url) }
-            }, onCancel: {
-                showPicker = false
-            })
-            .ignoresSafeArea()
-        }
         .sheet(isPresented: $showServerPicker) {
             ServerRestorePickerSheet { url in
                 showServerPicker = false
@@ -224,7 +211,14 @@ struct BackupRestoreView: View {
     private var otherSourcesSection: some View {
         Section {
             Button {
-                showPicker = true
+                // [T-restore-picker-uikit] Presented from UIKit as an import
+                // (copy), not from a SwiftUI sheet: in the sheet, picking a
+                // file could do nothing at all.
+                DocumentPickerPresenter.present(types: [BackupDelivery.contentType, .zip, .data, .item]) { urls in
+                    guard let url = urls.first else { return }
+                    logger.info("[Restore] picked \(url.lastPathComponent)")
+                    load(url)
+                }
             } label: {
                 Label {
                     Text("Choose from Files…")
@@ -666,6 +660,10 @@ struct BackupRestoreView: View {
             // surface later as a corrupt archive.
             if MountedFolderCoordinator.isUnderMount(url) {
                 try MountedFolderCoordinator.copy(from: url, to: dest)
+            } else if url.path.contains("-Inbox/") || url.path.hasPrefix(FileManager.default.temporaryDirectory.path) && !url.deletingLastPathComponent().lastPathComponent.hasPrefix("server-restore-") {
+                // A copy the document picker already made for us: move it
+                // rather than needing twice the space (and time) to copy.
+                try FileManager.default.moveItem(at: url, to: dest)
             } else {
                 try FileManager.default.copyItem(at: url, to: dest)
             }

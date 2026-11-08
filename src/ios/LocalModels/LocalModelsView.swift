@@ -25,8 +25,6 @@ struct LocalModelsView: View {
     @State private var loadedName: String? = LlamaEngine.shared.loadedPath.map { ($0 as NSString).lastPathComponent }
     @State private var unloadMessage: String?
     @State private var busySeconds: Int?
-    @State private var showModelPicker = false
-    @State private var projectorTarget: LocalModelFile?
     @State private var showLinkSheet = false
     @State private var linkText = ""
     @State private var importing: String?
@@ -45,7 +43,10 @@ struct LocalModelsView: View {
                     Label("Download Models", systemImage: "arrow.down.circle.fill")
                 }
                 Button {
-                    showModelPicker = true
+                    DocumentPickerPresenter.present { urls in
+                        guard let url = urls.first else { return }
+                        runImport(url.lastPathComponent) { try await downloads.importModel(from: url) }
+                    }
                 } label: {
                     Label("Import from Files", systemImage: "folder.badge.plus")
                 }
@@ -96,20 +97,6 @@ struct LocalModelsView: View {
             if let m = pendingDelete {
                 Text("\(m.displayName) (\(LocalModelFormat.bytes(m.sizeBytes))) will be removed from this device.")
             }
-        }
-        .sheet(isPresented: $showModelPicker) {
-            GGUFFilePicker(onPick: { url in
-                showModelPicker = false
-                runImport(url.lastPathComponent) { try await downloads.importModel(from: url) }
-            }, onCancel: { showModelPicker = false })
-            .ignoresSafeArea()
-        }
-        .sheet(item: $projectorTarget) { model in
-            GGUFFilePicker(onPick: { url in
-                projectorTarget = nil
-                runImport(url.lastPathComponent) { try await downloads.importProjector(from: url, for: model.id) }
-            }, onCancel: { projectorTarget = nil })
-            .ignoresSafeArea()
         }
         .alert("Download from Link", isPresented: $showLinkSheet) {
             TextField("https://…/model.gguf", text: $linkText)
@@ -179,7 +166,11 @@ struct LocalModelsView: View {
                         .contextMenu {
                             if !model.supportsVision {
                                 Button {
-                                    projectorTarget = model
+                                    let id = model.id
+                                    DocumentPickerPresenter.present { urls in
+                                        guard let url = urls.first else { return }
+                                        runImport(url.lastPathComponent) { try await downloads.importProjector(from: url, for: id) }
+                                    }
                                 } label: {
                                     Label("Add Vision Projector from Files", systemImage: "photo.badge.plus")
                                 }
@@ -368,46 +359,5 @@ struct LocalModelBadge: View {
             .padding(.vertical, 1)
             .background(tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 4))
             .foregroundStyle(tint)
-    }
-}
-
-
-// MARK: - File picker
-
-/// Picks a .gguf file from anywhere the Files app can reach. Opened in place;
-/// the import copies it with the security scope held.
-struct GGUFFilePicker: UIViewControllerRepresentable {
-    let onPick: (URL) -> Void
-    var onCancel: () -> Void = {}
-
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        var types: [UTType] = [.data, .item]
-        if let gguf = UTType(filenameExtension: "gguf") { types.insert(gguf, at: 0) }
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types)
-        picker.delegate = context.coordinator
-        picker.allowsMultipleSelection = false
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick, onCancel: onCancel) }
-
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let onPick: (URL) -> Void
-        let onCancel: () -> Void
-        init(onPick: @escaping (URL) -> Void, onCancel: @escaping () -> Void) {
-            self.onPick = onPick
-            self.onCancel = onCancel
-        }
-
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            guard let url = urls.first else { onCancel(); return }
-            onPick(url)
-        }
-
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            onCancel()
-        }
     }
 }
