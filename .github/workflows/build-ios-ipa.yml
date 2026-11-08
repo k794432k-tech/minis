@@ -56,6 +56,63 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
+      # Files uploaded through the GitHub web page (or committed from Windows)
+      # lose their executable bit, and the build scripts then fail with
+      # "Permission denied". Restore it for everything that needs it.
+      - name: Restore executable permissions
+        run: |
+          set -euo pipefail
+          while read -r f; do
+            [ -n "$f" ] && [ -f "$f" ] && chmod +x "$f"
+          done <<'EOF'
+            deps/aot/tools/image_info.py
+            deps/aot/workloads/pcre_train.sh
+            deps/build_aot.sh
+            deps/build_ffmpeg.sh
+            deps/build_ish.sh
+            deps/build_lame.sh
+            deps/build_proot.sh
+            deps/build_rclone_android.sh
+            deps/build_rclone_ios.sh
+            deps/fetch_llama_xcframework.sh
+            deps/lame-3.100/compile
+            deps/lame-3.100/config.guess
+            deps/lame-3.100/config.rpath
+            deps/lame-3.100/config.sub
+            deps/lame-3.100/configure
+            deps/lame-3.100/depcomp
+            deps/lame-3.100/frontend/depcomp
+            deps/lame-3.100/install-sh
+            deps/lame-3.100/libmp3lame/depcomp
+            deps/lame-3.100/misc/auenc
+            deps/lame-3.100/misc/depcomp
+            deps/lame-3.100/misc/mlame
+            deps/lame-3.100/misc/mugeco.sh
+            deps/lame-3.100/missing
+            deps/lame-3.100/mpglib/depcomp
+            deps/prepare_alpine_rootfs.sh
+            scripts/add_locale.py
+            scripts/add_localization.py
+            scripts/check_android_locale.py
+            scripts/check_locale_batch.py
+            scripts/gen_debug_skill.sh
+            scripts/gen_debug_skill_android.sh
+            scripts/ios-unit-tests.sh
+            scripts/prepare_android_sandbox.sh
+            scripts/register_locale.py
+            scripts/symbolicate_hang.py
+            scripts/update_models_dev.sh
+            scripts/verify_models_dev_resolution.py
+            src/ios/default_mount/usr/local/bin/gnome-open
+            src/ios/default_mount/usr/local/bin/kde-open
+            src/ios/default_mount/usr/local/bin/minis-open
+            src/ios/default_mount/usr/local/bin/sensible-browser
+            src/ios/default_mount/usr/local/bin/www-browser
+            src/ios/default_mount/usr/local/bin/x-www-browser
+            src/ios/default_mount/usr/local/bin/xdg-open
+          EOF
+          find deps scripts -maxdepth 2 -name '*.sh' -exec chmod +x {} +
+
       # A repository created by uploading the source (instead of forking
       # OpenMinis/OpenMinis) has empty submodule folders. Fetch them directly.
       - name: Make sure submodules are present
