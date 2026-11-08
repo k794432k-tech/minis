@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 private let logger = AppLogger(category: "Backup")
@@ -92,15 +93,18 @@ struct BackupRestoreView: View {
         }
         .modifier(StandaloneTitle(title: AppLocalized("Restore"),
                                  active: !embedded))
-        .fileImporter(isPresented: $showPicker,
-                      allowedContentTypes: [BackupDelivery.contentType, .data],
-                      allowsMultipleSelection: false) { result in
-            switch result {
-            case .success(let urls):
-                if let url = urls.first { load(url) }
-            case .failure(let error):
-                errorText = error.localizedDescription
+        // [T-restore-picker-sheet] An explicit UIDocumentPickerViewController
+        // in a sheet instead of `.fileImporter`. Inside the embedded
+        // Backup & Restore tab container the `.fileImporter` presentation could
+        // silently fail to appear ("tap does nothing"), the same reason the
+        // mount screen uses a picker sheet. The picked URL is handed over on
+        // the next run-loop tick, after the sheet has left the hierarchy.
+        .sheet(isPresented: $showPicker) {
+            BackupPackagePicker { url in
+                logger.info("[Restore] picked \(url.lastPathComponent)")
+                DispatchQueue.main.async { load(url) }
             }
+            .ignoresSafeArea()
         }
         .sheet(isPresented: $showServerPicker) {
             ServerRestorePickerSheet { url in
@@ -1692,5 +1696,38 @@ struct ServerPackageListView: View {
     /// from then on.
     private static func discardScratch(_ fileURL: URL) {
         try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent())
+    }
+}
+
+
+// MARK: - Package picker
+
+/// Document picker for `.minisbak` packages (any file is accepted, since a
+/// package shared through some apps loses its type). Picks are opened
+/// in place; `load(_:)` copies the file out of its security scope.
+private struct BackupPackagePicker: UIViewControllerRepresentable {
+    let onPick: (URL) -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: [BackupDelivery.contentType, .zip, .data, .item]
+        )
+        picker.delegate = context.coordinator
+        picker.allowsMultipleSelection = false
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+        init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
+            onPick(url)
+        }
     }
 }
