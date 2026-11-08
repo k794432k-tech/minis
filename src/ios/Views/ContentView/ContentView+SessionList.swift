@@ -224,6 +224,13 @@ extension ContentView {
             #if DEBUG
             let _ = SidebarIdentityTracer.note(groups, site: "sidebar")
             #endif
+            // [T-group-chat-home] AI group chats live on the home list, not
+            // only in the overflow menu.
+            if !isSelecting {
+                Section {
+                    GroupChatHomeRow { activeToolSheet = .groupChats }
+                }
+            }
             ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
                 Section {
                     // Folder card as the section's FIRST ROW, not its header:
@@ -324,6 +331,13 @@ extension ContentView {
             #if DEBUG
             let _ = SidebarIdentityTracer.note(groups, site: "selection")
             #endif
+            // [T-group-chat-home] AI group chats live on the home list, not
+            // only in the overflow menu.
+            if !isSelecting {
+                Section {
+                    GroupChatHomeRow { activeToolSheet = .groupChats }
+                }
+            }
             ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
                 Section {
                     // Folder card as first row — see the sidebar list's

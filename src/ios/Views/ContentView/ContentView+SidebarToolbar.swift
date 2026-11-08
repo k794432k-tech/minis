@@ -369,6 +369,18 @@ extension ContentView {
                 }
             }
         }
+        // [T-group-chat-home] One tap to the AI group chats.
+        ToolbarItem(placement: .topBarTrailing) {
+            if !isSelecting {
+                Button {
+                    activeToolSheet = .groupChats
+                } label: {
+                    Image(systemName: "person.3")
+                        .font(.system(size: 15, weight: .medium))
+                }
+                .accessibilityLabel(Text("AI Group Chat"))
+            }
+        }
         ToolbarItem(placement: .topBarTrailing) {
             if !isSelecting {
                 Menu {
