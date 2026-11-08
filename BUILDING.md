@@ -157,12 +157,9 @@ xcodebuild -project src/ios/Minis.xcodeproj -scheme Minis \
 `.github/workflows/build-ios-ipa.yml` builds the app on a GitHub-hosted
 `macos-26` runner — no Mac needed. Run **Build iOS IPA** from the Actions tab
 (or push a `v*` tag to also publish a Release). It builds the native
-dependencies (cached after the first run), then produces:
-
-- `Minis-unsigned.ipa` — unsigned; sign it when installing (Sideloadly,
-  AltStore / SideStore, or your own certificate).
-- `Minis-trollstore.tipa` — fake-signed with `ldid` and the app's
-  entitlements, for TrollStore.
+dependencies (cached after the first run), then produces
+`Minis-unsigned.ipa` — unsigned; sign it when installing (全能签, Sideloadly,
+AltStore / SideStore, or your own certificate).
 
 Optional repository secret: `ANTHROPIC_OAUTH_IDENTIFIER_PROMPT` (see above).
 A repository created by uploading the source instead of forking still works:
