@@ -15,8 +15,31 @@
 //
 
 import Foundation
+import UIKit
 
 private let logger = AppLogger(category: "GroupChat")
+
+/// Keeps each group's session alive after its screen closes, so members
+/// finish their turns in the background instead of stopping.
+@MainActor
+enum GroupChatSessions {
+    private static var sessions: [String: GroupChatSession] = [:]
+
+    static func session(for chat: GroupChat) -> GroupChatSession {
+        if let existing = sessions[chat.id] { return existing }
+        let session = GroupChatSession(chat: chat)
+        sessions[chat.id] = session
+        return session
+    }
+
+    static func isRunning(_ id: String) -> Bool { sessions[id]?.isRunning ?? false }
+
+    /// The group was deleted: stop it and forget it.
+    static func discard(_ id: String) {
+        sessions[id]?.stop()
+        sessions[id] = nil
+    }
+}
 
 @MainActor
 final class GroupChatSession: ObservableObject {
@@ -38,6 +61,8 @@ final class GroupChatSession: ObservableObject {
     /// does not reset the state of the run that replaced it.
     private var runToken = UUID()
     private var lastPersist = Date.distantPast
+    /// Text length at the last repetition check, per streaming message.
+    private var lastLoopCheck: [String: Int] = [:]
 
     /// How many recent messages each member sees.
     private static let historyLimit = 40
@@ -165,7 +190,13 @@ final class GroupChatSession: ObservableObject {
         isRunning = true
         let token = UUID()
         runToken = token
+        // Ask iOS for time to finish the turn if the app is sent to the
+        // background mid-discussion.
+        let background = UIApplication.shared.beginBackgroundTask(withName: "GroupChat-\(chat.id)")
         runTask = Task { [weak self] in
+            defer {
+                if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
+            }
             guard let self else { return }
             for round in 0..<rounds {
                 let speakers = round == 0 ? firstRound : self.chat.members
@@ -216,6 +247,7 @@ final class GroupChatSession: ObservableObject {
                 if Task.isCancelled { break }
                 if case .text(let piece) = chunk {
                     appendText(messageId, piece)
+                    if shouldCutOff(messageId, member: member) { break }
                 }
             }
             finish(messageId)
@@ -260,8 +292,9 @@ final class GroupChatSession: ObservableObject {
                 var calls: [(id: String, name: String, args: [String: Any])] = []
                 var reasoning: String?
                 var echo: ReasoningEcho?
+                var stoppedEarly = false
                 for try await event in stream {
-                    if Task.isCancelled { break }
+                    if Task.isCancelled || stoppedEarly { break }
                     switch event {
                     case .textDelta(let piece):
                         if text.isEmpty, let i = index(of: messageId), !chat.messages[i].text.isEmpty {
@@ -269,10 +302,16 @@ final class GroupChatSession: ObservableObject {
                         }
                         text += piece
                         appendText(messageId, piece)
+                        if shouldCutOff(messageId, member: member) { stoppedEarly = true }
+                    case .thinkingDelta(let piece):
+                        appendReasoning(messageId, piece)
                     case .toolCallComplete(let id, let name, let args, _):
                         calls.append((id, name, args))
                     case .reasoningContent(let content):
                         reasoning = content
+                        if let i = index(of: messageId), (chat.messages[i].reasoning ?? "").isEmpty {
+                            chat.messages[i].reasoning = content
+                        }
                     case .reasoningEcho(let value):
                         echo = value
                     default:
@@ -288,7 +327,7 @@ final class GroupChatSession: ObservableObject {
                 assistant.reasoningContent = reasoning
                 assistant.reasoningEcho = echo
                 conversation.append(assistant)
-                if calls.isEmpty { break }
+                if calls.isEmpty || stoppedEarly { break }
                 steps += 1
 
                 var results: [AgentContentPart] = []
@@ -418,7 +457,9 @@ final class GroupChatSession: ObservableObject {
         Messages from other participants are prefixed with their name in square brackets. \
         Write only your own reply as \(member.name): do not prefix it with your name, and never write lines for anyone else. \
         Keep it conversational and concise (usually under 150 words) unless asked for detail. \
-        You may agree, disagree, or build on what others said and address them by name; avoid repeating points already made. \
+        You may agree, disagree, or build on what others said and address them by name. \
+        Never repeat or reword what you or anyone else already said — add something new, or reply in one short sentence if you have nothing to add. \
+        Do not show your reasoning; write only the final reply. \
         Reply in the language the user is using.
         """)
         let tools = chat.activeTools
@@ -509,9 +550,7 @@ final class GroupChatSession: ObservableObject {
     }
 
     static func stripThinking(_ text: String) -> String {
-        guard text.contains("<think>") else { return text }
-        return text.replacingOccurrences(of: #"(?s)<think>.*?(</think>\s*|$)"#, with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        GroupThinking.split(text).visible
     }
 
     // MARK: Message updates
@@ -525,11 +564,67 @@ final class GroupChatSession: ObservableObject {
         }
     }
 
+    private func appendReasoning(_ id: String, _ piece: String) {
+        guard let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
+        chat.messages[i].reasoning = (chat.messages[i].reasoning ?? "") + piece
+    }
+
+    /// Moves thinking out of the reply text into `reasoning`, and cleans the
+    /// reply: drops a "[Name]:" prefix, cuts lines written for other members
+    /// and collapses a reply that got stuck repeating itself.
+    private func settleText(at i: Int) {
+        let parts = GroupThinking.split(chat.messages[i].text)
+        if !parts.thinking.isEmpty {
+            let existing = chat.messages[i].reasoning ?? ""
+            chat.messages[i].reasoning = existing.isEmpty ? parts.thinking : existing + "\n\n" + parts.thinking
+        }
+        var text = parts.visible
+        if let member = chat.member(id: chat.messages[i].memberId) {
+            text = GroupReplyCleaner.clean(text, speaker: member.name,
+                                           others: chat.members.filter { $0.id != member.id }.map(\.name))
+        }
+        text = GroupReplyCleaner.collapseRepetition(text)
+        chat.messages[i].text = text
+    }
+
+    /// True when the streaming reply has started looping or is writing turns
+    /// for other members — the stream is then stopped early.
+    private func shouldCutOff(_ id: String, member: GroupChatMember) -> Bool {
+        guard let i = index(of: id) else { return false }
+        let text = chat.messages[i].text
+        let count = text.count
+        guard count > 120, count - (lastLoopCheck[id] ?? 0) >= 40 else { return false }
+        lastLoopCheck[id] = count
+        let visible = GroupThinking.split(text).visible
+        if GroupReplyCleaner.isLooping(visible) {
+            logger.info("[Reply] \(member.name) is repeating itself — stopping")
+            return true
+        }
+        let others = chat.members.filter { $0.id != member.id }.map(\.name)
+        if GroupReplyCleaner.speaksForOthers(visible, others: others) {
+            logger.info("[Reply] \(member.name) started writing for others — stopping")
+            return true
+        }
+        return false
+    }
+
     private func finish(_ id: String) {
         guard let i = chat.messages.firstIndex(where: { $0.id == id }) else { return }
         chat.messages[i].isStreaming = false
-        chat.messages[i].text = Self.stripThinking(chat.messages[i].text)
+        settleText(at: i)
         saveRememberTags(at: i)
+        // A reply that only repeats what this member just said adds nothing.
+        if let memberId = chat.messages[i].memberId, !chat.messages[i].text.isEmpty,
+           (chat.messages[i].toolEvents ?? []).isEmpty {
+            let mine = GroupReplyCleaner.normalized(chat.messages[i].text)
+            let earlier = chat.messages[..<i].suffix(8).filter { $0.memberId == memberId }
+            if earlier.contains(where: { GroupReplyCleaner.normalized($0.text) == mine }) {
+                logger.info("[Reply] dropped a duplicate reply")
+                chat.messages.remove(at: i)
+                persist()
+                return
+            }
+        }
         if chat.messages[i].text.isEmpty && chat.messages[i].errorText == nil
             && (chat.messages[i].toolEvents ?? []).isEmpty {
             chat.messages[i].errorText = AppLocalized("No reply")
@@ -560,7 +655,7 @@ final class GroupChatSession: ObservableObject {
     private func finishStreamingMessages() {
         for i in chat.messages.indices where chat.messages[i].isStreaming {
             chat.messages[i].isStreaming = false
-            chat.messages[i].text = Self.stripThinking(chat.messages[i].text)
+            settleText(at: i)
             saveRememberTags(at: i)
             if chat.messages[i].text.isEmpty && (chat.messages[i].toolEvents ?? []).isEmpty {
                 chat.messages[i].errorText = AppLocalized("Stopped")

@@ -155,7 +155,7 @@ struct GroupMemberRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            GroupAvatar(name: member.name, colorIndex: member.colorIndex, size: 32)
+            GroupAvatar(name: member.name, colorIndex: member.colorIndex, size: 32, entryId: member.entryId)
             VStack(alignment: .leading, spacing: 2) {
                 Text(member.name).font(.body)
                 Text(modelName)
@@ -185,16 +185,27 @@ struct GroupAvatar: View {
     let name: String
     let colorIndex: Int
     var size: CGFloat = 30
+    /// The member's model: shows the avatar set in its persona, if any.
+    var entryId: String? = nil
+    @ObservedObject private var personas = ModelPersonaStore.shared
 
     var body: some View {
-        Circle()
-            .fill(GroupChatPalette.color(colorIndex).gradient)
-            .frame(width: size, height: size)
-            .overlay(
-                Text(String(name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased())
-                    .font(.system(size: size * 0.45, weight: .semibold))
-                    .foregroundStyle(.white)
-            )
+        if let image = personas.avatar(for: entryId) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: size, height: size)
+                .clipShape(Circle())
+        } else {
+            Circle()
+                .fill(GroupChatPalette.color(colorIndex).gradient)
+                .frame(width: size, height: size)
+                .overlay(
+                    Text(String(name.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased())
+                        .font(.system(size: size * 0.45, weight: .semibold))
+                        .foregroundStyle(.white)
+                )
+        }
     }
 }
 

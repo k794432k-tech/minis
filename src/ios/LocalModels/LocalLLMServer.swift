@@ -46,18 +46,11 @@ final class LocalLLMServer: @unchecked Sendable {
             let center = NotificationCenter.default
             // While suspended iOS can reclaim the listening socket and the
             // listener keeps reporting "ready" although nothing is accepted
-            // any more. Close it on the way out and open a fresh one on the
-            // way back, then check that it really answers.
-            observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { [weak self] _ in
-                self?.queue.async {
-                    self?.listener?.cancel()
-                    self?.listener = nil
-                    self?.setRunning(false)
-                    self?.setHealthy(false)
-                }
-            })
+            // any more. It is kept open while in the background (a group chat
+            // may still be talking to it), and checked — and rebuilt if dead —
+            // on the way back.
             observers.append(center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil) { [weak self] _ in
-                self?.restart()
+                self?.checkHealth()
             })
             observers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { [weak self] _ in
                 self?.queue.async { self?.startListener() }

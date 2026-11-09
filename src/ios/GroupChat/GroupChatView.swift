@@ -22,7 +22,7 @@ struct GroupChatView: View {
     @FocusState private var inputFocused: Bool
 
     init(chat: GroupChat) {
-        _session = StateObject(wrappedValue: GroupChatSession(chat: chat))
+        _session = StateObject(wrappedValue: GroupChatSessions.session(for: chat))
     }
 
     private var chat: GroupChat { session.chat }
@@ -64,7 +64,6 @@ struct GroupChatView: View {
         .onChange(of: photoItems) { items in
             Task { await loadPhotos(items) }
         }
-        .onDisappear { session.stop() }
     }
 
     // MARK: Messages
@@ -109,7 +108,7 @@ struct GroupChatView: View {
         VStack(spacing: 8) {
             HStack(spacing: -8) {
                 ForEach(chat.members) { member in
-                    GroupAvatar(name: member.name, colorIndex: member.colorIndex, size: 34)
+                    GroupAvatar(name: member.name, colorIndex: member.colorIndex, size: 34, entryId: member.entryId)
                         .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 2))
                 }
             }
@@ -337,7 +336,7 @@ private struct GroupMessageBubble: View {
             .contextMenu { menuItems }
         } else {
             HStack(alignment: .top, spacing: 8) {
-                GroupAvatar(name: message.speakerName, colorIndex: member?.colorIndex ?? 0, size: 30)
+                GroupAvatar(name: message.speakerName, colorIndex: member?.colorIndex ?? 0, size: 30, entryId: member?.entryId)
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
                         Text(message.speakerName)
@@ -355,8 +354,20 @@ private struct GroupMessageBubble: View {
         }
     }
 
+    /// Reply and thinking, split live while streaming.
+    private var splitParts: (thinking: String, visible: String, thinkingNow: Bool) {
+        if message.isStreaming {
+            let p = GroupThinking.split(message.text)
+            let extra = message.reasoning ?? ""
+            let thinking = [extra, p.thinking].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            return (thinking, p.visible, p.isThinking || (p.visible.isEmpty && !extra.isEmpty))
+        }
+        return (message.reasoning ?? "", message.text, false)
+    }
+
     @ViewBuilder private var content: some View {
-        if message.isStreaming && message.text.isEmpty && (message.toolEvents ?? []).isEmpty {
+        let parts = splitParts
+        if message.isStreaming && parts.visible.isEmpty && parts.thinking.isEmpty && (message.toolEvents ?? []).isEmpty {
             HStack(spacing: 6) {
                 ProgressView().controlSize(.small)
                 Text("Thinking…").font(.callout).foregroundStyle(.secondary)
@@ -366,6 +377,9 @@ private struct GroupMessageBubble: View {
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
         } else {
             VStack(alignment: .leading, spacing: 6) {
+                if !parts.thinking.isEmpty || parts.thinkingNow {
+                    GroupThinkingView(text: parts.thinking, inProgress: parts.thinkingNow)
+                }
                 if let events = message.toolEvents, !events.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(events) { event in
@@ -374,14 +388,14 @@ private struct GroupMessageBubble: View {
                         }
                     }
                 }
-                if message.isStreaming && message.text.isEmpty {
+                if message.isStreaming && parts.visible.isEmpty && !parts.thinkingNow {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
                         Text("Working…").font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                if !message.text.isEmpty {
-                    Text(Self.markdown(message.text))
+                if !parts.visible.isEmpty {
+                    Text(Self.markdown(parts.visible))
                         .textSelection(.enabled)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
@@ -571,6 +585,50 @@ private struct GroupToolEventDetailView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+        }
+    }
+}
+
+/// The member's thinking, folded away until tapped.
+private struct GroupThinkingView: View {
+    let text: String
+    let inProgress: Bool
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 5) {
+                    if inProgress {
+                        ProgressView().controlSize(.mini)
+                        Text("Thinking…")
+                    } else {
+                        Image(systemName: "brain")
+                        Text("Thought process")
+                    }
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color(.tertiarySystemFill), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(text.isEmpty)
+            if expanded && !text.isEmpty {
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .padding(.leading, 10)
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(Color.secondary.opacity(0.3)).frame(width: 2)
+                    }
             }
         }
     }

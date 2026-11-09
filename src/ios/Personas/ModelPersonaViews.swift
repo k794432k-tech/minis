@@ -6,6 +6,7 @@
 //  personality and memories.
 //
 
+import PhotosUI
 import SwiftUI
 
 // MARK: - List
@@ -77,7 +78,7 @@ private struct ModelPersonaRow: View {
         HStack(spacing: 10) {
             GroupAvatar(name: persona?.effectiveName ?? GroupChatModelCatalog.displayName(entry),
                         colorIndex: entry.id.unicodeScalars.reduce(0) { $0 &+ Int($1.value) } % GroupChatPalette.colors.count,
-                        size: 30)
+                        size: 30, entryId: entry.id)
                 .opacity(persona.map { $0.enabled && !$0.isEmpty } ?? false ? 1 : 0.35)
             VStack(alignment: .leading, spacing: 2) {
                 Text(persona?.effectiveName ?? GroupChatModelCatalog.displayName(entry))
@@ -110,6 +111,7 @@ struct ModelPersonaEditView: View {
     @State private var editingMemory: ModelMemoryEntry?
     @State private var confirmClear = false
     @State private var confirmReset = false
+    @State private var avatarItem: PhotosPickerItem?
     @Environment(\.dismiss) private var dismiss
 
     init(entryId: String) {
@@ -128,6 +130,46 @@ struct ModelPersonaEditView: View {
 
     var body: some View {
         Form {
+            Section {
+                HStack(spacing: 16) {
+                    GroupAvatar(
+                        name: draft.effectiveName ?? modelName,
+                        colorIndex: entryId.unicodeScalars.reduce(0) { $0 &+ Int($1.value) } % GroupChatPalette.colors.count,
+                        size: 64, entryId: entryId
+                    )
+                    VStack(alignment: .leading, spacing: 8) {
+                        PhotosPicker(selection: $avatarItem, matching: .images) {
+                            Label(draft.avatarFile == nil ? "Choose Avatar" : "Change Avatar", systemImage: "photo")
+                        }
+                        if draft.avatarFile != nil {
+                            Button(role: .destructive) {
+                                ModelPersonaStore.removeAvatarFile(draft.avatarFile)
+                                draft.avatarFile = nil
+                                store.save(draft)
+                            } label: {
+                                Label("Remove Avatar", systemImage: "trash")
+                            }
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                }
+                .padding(.vertical, 4)
+            } footer: {
+                Text("Shown next to this model's messages in group chats.")
+            }
+            .onChange(of: avatarItem) { item in
+                guard let item else { return }
+                Task {
+                    if let data = try? await item.loadTransferable(type: Data.self),
+                       let file = ModelPersonaStore.saveAvatarImage(data) {
+                        ModelPersonaStore.removeAvatarFile(draft.avatarFile)
+                        draft.avatarFile = file
+                        store.save(draft)
+                    }
+                    avatarItem = nil
+                }
+            }
+
             Section {
                 Toggle("Use This Persona", isOn: $draft.enabled)
                 LabeledContent("Model", value: modelName)

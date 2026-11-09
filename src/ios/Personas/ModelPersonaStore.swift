@@ -20,6 +20,7 @@
 //
 
 import Foundation
+import UIKit
 
 struct ModelMemoryEntry: Codable, Identifiable, Hashable {
     enum Source: String, Codable {
@@ -51,6 +52,8 @@ struct ModelPersona: Codable, Identifiable, Hashable {
     var autoMemory: Bool = true
     var memories: [ModelMemoryEntry] = []
     var updatedAt: Date = Date()
+    /// Avatar image file name in the personas' Avatars folder.
+    var avatarFile: String? = nil
 
     var isEmpty: Bool {
         name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -98,6 +101,51 @@ final class ModelPersonaStore: ObservableObject {
     func activePersona(for entryId: String?) -> ModelPersona? {
         guard let entryId, let p = personas[entryId], p.enabled, !p.isEmpty else { return nil }
         return p
+    }
+
+    // MARK: Avatar
+
+    private static var avatarsDirectory: URL {
+        let dir = directory.appendingPathComponent("Avatars", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+    private let avatarCache = NSCache<NSString, UIImage>()
+
+    /// Stores picked image data as a small square JPEG; returns its file name.
+    static func saveAvatarImage(_ data: Data) -> String? {
+        guard let image = UIImage(data: data) else { return nil }
+        let side: CGFloat = 256
+        let scale = max(side / max(image.size.width, 1), side / max(image.size.height, 1))
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let square = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format).image { _ in
+            image.draw(in: CGRect(x: (side - size.width) / 2, y: (side - size.height) / 2,
+                                  width: size.width, height: size.height))
+        }
+        guard let jpeg = square.jpegData(compressionQuality: 0.85) else { return nil }
+        let name = UUID().uuidString + ".jpg"
+        do {
+            try jpeg.write(to: avatarsDirectory.appendingPathComponent(name), options: .atomic)
+            return name
+        } catch {
+            return nil
+        }
+    }
+
+    static func removeAvatarFile(_ name: String?) {
+        guard let name, !name.isEmpty else { return }
+        try? FileManager.default.removeItem(at: avatarsDirectory.appendingPathComponent(name))
+    }
+
+    /// The avatar set for a model (whether or not its persona is switched on).
+    func avatar(for entryId: String?) -> UIImage? {
+        guard let entryId, let file = personas[entryId]?.avatarFile else { return nil }
+        if let cached = avatarCache.object(forKey: file as NSString) { return cached }
+        guard let image = UIImage(contentsOfFile: Self.avatarsDirectory.appendingPathComponent(file).path) else { return nil }
+        avatarCache.setObject(image, forKey: file as NSString)
+        return image
     }
 
     // MARK: Editing

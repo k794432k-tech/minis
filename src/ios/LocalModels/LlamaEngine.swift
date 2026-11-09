@@ -730,6 +730,9 @@ final class LlamaEngine: @unchecked Sendable {
         guard let context, let vocab else { throw LlamaEngineError.contextCreateFailed }
         let sampler = llama_sampler_chain_init(llama_sampler_chain_default_params())
         defer { llama_sampler_free(sampler) }
+        // Small models easily fall into repeating a sentence forever; a mild
+        // penalty on the last 256 tokens breaks those loops.
+        llama_sampler_chain_add(sampler, llama_sampler_init_penalties(256, 1.1, 0.0, 0.0))
         if sampling.temperature <= 0.01 {
             llama_sampler_chain_add(sampler, llama_sampler_init_greedy())
         } else {

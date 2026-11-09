@@ -90,7 +90,7 @@ private struct GroupChatRow: View {
         HStack(spacing: 12) {
             ZStack {
                 ForEach(Array(chat.members.prefix(3).enumerated()), id: \.offset) { index, member in
-                    GroupAvatar(name: member.name, colorIndex: member.colorIndex, size: 26)
+                    GroupAvatar(name: member.name, colorIndex: member.colorIndex, size: 26, entryId: member.entryId)
                         .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 1.5))
                         .offset(x: CGFloat(index) * 10 - 10, y: index % 2 == 0 ? -6 : 6)
                 }

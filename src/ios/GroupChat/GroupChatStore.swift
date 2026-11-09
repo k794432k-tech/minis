@@ -49,6 +49,9 @@ struct GroupChatMessage: Codable, Identifiable, Hashable {
     var isStreaming: Bool = false
     /// Tool calls made while producing this reply (nil in older files).
     var toolEvents: [GroupToolEvent]? = nil
+    /// The model's thinking / reasoning, kept apart from the reply and shown
+    /// collapsed (nil when the model did not think out loud).
+    var reasoning: String? = nil
 }
 
 enum GroupReplyMode: String, Codable, CaseIterable, Identifiable {
@@ -160,6 +163,7 @@ final class GroupChatStore: ObservableObject {
     }
 
     func delete(id: String) {
+        GroupChatSessions.discard(id)
         guard let chat = chat(id: id) else { return }
         for message in chat.messages {
             for file in message.imageFiles {
