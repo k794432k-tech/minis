@@ -338,7 +338,6 @@ final class LlamaEngine: @unchecked Sendable {
             }
         }
         var mparams = llama_model_default_params()
-        mparams.use_mmap = true
         #if targetEnvironment(simulator)
         mparams.n_gpu_layers = 0
         #else
