@@ -389,7 +389,7 @@ struct LocalModelsView: View {
         } header: {
             Text("Inference")
         } footer: {
-            Text("Compact Prompt replaces the app's long agent instructions (over 10K tokens) with a short one and sends no tools, so small models answer normally; turn it off only for capable models (7B+) if you want them to use tools. A longer context keeps more history but uses more memory. Use hf-mirror.com if huggingface.co is unreachable.")
+            Text("Compact Prompt replaces the app's long agent instructions (over 10K tokens) with a short one so small models answer normally. With Tool Calling on, it still gives the model a shell and file read/write, so it can run commands and install software; turn Compact Prompt off only for capable models (7B+) to give them every tool. A longer context keeps more history but uses more memory. Use hf-mirror.com if huggingface.co is unreachable.")
         }
     }
 }

@@ -111,7 +111,7 @@ enum LocalChatFormatter {
     /// A short system prompt for small local models: the identity part of
     /// the app's prompt (so names, souls and personas still apply) plus a few
     /// plain instructions, without the tool and workflow rules.
-    static func compactSystemPrompt(from full: String) -> String {
+    static func compactSystemPrompt(from full: String, withTools: Bool = false) -> String {
         var identity = full
         if let r = full.range(of: agentRulesMarker) {
             identity = String(full[..<r.lowerBound])
@@ -124,12 +124,68 @@ enum LocalChatFormatter {
             .replacingOccurrences(of: "with a fully functional iSH Linux shell (Alpine Linux, aarch64)", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if identity.count > 4000 { identity = String(identity.prefix(4000)) }
-        let rules = """
-        You are running fully offline on the user's iPhone as a small on-device model.
-        Answer the user directly in plain text, in the language they use. Be concise and helpful.
-        You have no tools in this mode: never output XML, function-call or tool-call markup; just reply.
-        """
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd EEEE HH:mm"
+        let now = "Current local date and time: \(formatter.string(from: Date())) (\(TimeZone.current.identifier))."
+        let rules: String
+        if withTools {
+            rules = """
+            You are running offline on the user's iPhone as an on-device model. \(now)
+            Answer in the language the user uses. Be concise.
+            You have a real Alpine Linux shell on this iPhone. When the user asks you to do something \
+            (run a command, check something, install software with `apk add`, create or read files, \
+            download with curl or wget), DO it by calling a tool — never say you cannot, and never \
+            tell the user to do it themselves. Call one tool, wait for its result, then answer from \
+            the result. For plain questions just reply in text without tools.
+            """
+        } else {
+            rules = """
+            You are running fully offline on the user's iPhone as a small on-device model. \(now)
+            Answer the user directly in plain text, in the language they use. Be concise and helpful.
+            You have no tools in this mode: never output XML, function-call or tool-call markup; just reply.
+            """
+        }
         return identity.isEmpty ? rules : identity + "\n\n" + rules
+    }
+
+    /// The few tools a small model can handle, with short descriptions and
+    /// only the arguments it needs (the app fills in the rest).
+    static func essentialTools(from tools: [[String: Any]]) -> [[String: Any]] {
+        let available = Set(tools.compactMap { ($0["function"] as? [String: Any])?["name"] as? String })
+        func tool(_ name: String, _ description: String, _ params: [String: String], required: [String]) -> [String: Any]? {
+            guard available.contains(name) else { return nil }
+            return ["type": "function", "function": [
+                "name": name,
+                "description": description,
+                "parameters": [
+                    "type": "object",
+                    "properties": params.mapValues { ["type": "string", "description": $0] },
+                    "required": required,
+                ] as [String: Any],
+            ] as [String: Any]]
+        }
+        return [
+            tool("shell_execute",
+                 "Run a shell command in Alpine Linux on this iPhone (e.g. date, ls, apk add python3, curl URL, python3 script.py). Returns its output.",
+                 ["command": "The command to run"], required: ["command"]),
+            tool("file_read", "Read a text file.", ["path": "Absolute path, e.g. /root/notes.txt"], required: ["path"]),
+            tool("file_write", "Create or overwrite a text file.",
+                 ["path": "Absolute path", "content": "Full file content"], required: ["path", "content"]),
+        ].compactMap { $0 }
+    }
+
+    /// Adds the short title the app shows for a tool call when a small model
+    /// left it out.
+    static func fillToolTitle(name: String, arguments: String) -> String {
+        guard let data = arguments.data(using: .utf8),
+              var obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              (obj["tool_title"] as? String)?.isEmpty ?? true else { return arguments }
+        let subject = (obj["command"] as? String) ?? (obj["path"] as? String) ?? name
+        obj["tool_title"] = String(subject.split(separator: "\n").first ?? Substring(name)).prefix(60).description
+        guard let out = try? JSONSerialization.data(withJSONObject: obj),
+              let json = String(data: out, encoding: .utf8) else { return arguments }
+        return json
     }
 
     private static func build(_ openAIMessages: [[String: Any]], tools: [[String: Any]], includeTools: Bool,
@@ -171,7 +227,8 @@ enum LocalChatFormatter {
         flushToolResponses()
 
         if compactSystem {
-            systemParts = [compactSystemPrompt(from: systemParts.joined(separator: "\n\n"))]
+            systemParts = [compactSystemPrompt(from: systemParts.joined(separator: "\n\n"),
+                                               withTools: includeTools && !tools.isEmpty)]
         }
         if includeTools && !tools.isEmpty {
             systemParts.append(toolsPrompt(tools))

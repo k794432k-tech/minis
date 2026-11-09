@@ -284909,18 +284909,18 @@
         }
       }
     },
-    "Compact Prompt replaces the app's long agent instructions (over 10K tokens) with a short one and sends no tools, so small models answer normally; turn it off only for capable models (7B+) if you want them to use tools. A longer context keeps more history but uses more memory. Use hf-mirror.com if huggingface.co is unreachable." : {
+    "Compact Prompt replaces the app's long agent instructions (over 10K tokens) with a short one so small models answer normally. With Tool Calling on, it still gives the model a shell and file read/write, so it can run commands and install software; turn Compact Prompt off only for capable models (7B+) to give them every tool. A longer context keeps more history but uses more memory. Use hf-mirror.com if huggingface.co is unreachable." : {
       "localizations" : {
         "zh-Hans" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "精简提示词会把 App 很长的 Agent 指令（超过 1 万 token）换成简短版本，并且不发送工具，小模型才能正常回答；只有能力较强的模型（7B 以上）需要用工具时才关掉。上下文越长能记住的历史越多，但更占内存。访问不了 huggingface.co 时请改用 hf-mirror.com。"
+            "value" : "精简提示词会把 App 很长的 Agent 指令（超过 1 万 token）换成简短版本，小模型才能正常回答。打开“工具调用”时，它仍然会给模型一个 Shell 和读写文件的工具，可以执行命令、安装软件；只有能力较强的模型（7B 以上）想用全部工具时才关闭精简提示词。上下文越长能记住的历史越多，但更占内存。访问不了 huggingface.co 时请改用 hf-mirror.com。"
           }
         },
         "zh-Hant" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "精簡提示詞會把 App 很長的 Agent 指令（超過 1 萬 token）換成簡短版本，並且不傳送工具，小模型才能正常回答；只有能力較強的模型（7B 以上）需要用工具時才關閉。上下文越長能記住的歷史越多，但更佔記憶體。無法連上 huggingface.co 時請改用 hf-mirror.com。"
+            "value" : "精簡提示詞會把 App 很長的 Agent 指令（超過 1 萬 token）換成簡短版本，小模型才能正常回答。開啟「工具呼叫」時，它仍會給模型一個 Shell 和讀寫檔案的工具，可以執行命令、安裝軟體；只有能力較強的模型（7B 以上）想用全部工具時才關閉精簡提示詞。上下文越長能記住的歷史越多，但更佔記憶體。無法連上 huggingface.co 時請改用 hf-mirror.com。"
           }
         }
       }

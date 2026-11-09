@@ -241,14 +241,17 @@ final class LocalLLMServer: @unchecked Sendable {
         let includeUsage = ((body["stream_options"] as? [String: Any])?["include_usage"] as? Bool) ?? false
         let tools = (body["tools"] as? [[String: Any]]) ?? []
         let compact = LocalModelSettings.compactPrompt
-        let useTools = !compact && LocalModelSettings.toolCalling && !tools.isEmpty
+        let useTools = LocalModelSettings.toolCalling && !tools.isEmpty
             && (body["tool_choice"] as? String) != "none"
+        // Compact mode keeps tools usable for small models: just a shell and
+        // file read/write with short descriptions instead of the whole set.
+        let offeredTools = compact && useTools ? LocalChatFormatter.essentialTools(from: tools) : tools
         let vision = model.supportsVision
             ? LocalChatFormatter.Vision(marker: LlamaEngine.mediaMarker, maxImages: 4)
             : nil
         let prompt = LocalChatFormatter.prompt(
             from: (body["messages"] as? [[String: Any]]) ?? [],
-            tools: tools, includeTools: useTools, vision: vision, compactSystem: compact
+            tools: offeredTools, includeTools: useTools && !offeredTools.isEmpty, vision: vision, compactSystem: compact
         )
 
         let requestedMax = (body["max_completion_tokens"] as? Int) ?? (body["max_tokens"] as? Int)
@@ -318,7 +321,7 @@ final class LocalLLMServer: @unchecked Sendable {
                         "index": toolIndex,
                         "id": "call_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(24))",
                         "type": "function",
-                        "function": ["name": name, "arguments": arguments],
+                        "function": ["name": name, "arguments": LocalChatFormatter.fillToolTitle(name: name, arguments: arguments)],
                     ]
                     toolIndex += 1
                     responder.sendEvent(chunk(delta: ["tool_calls": [call]]))
@@ -383,7 +386,7 @@ final class LocalLLMServer: @unchecked Sendable {
                     toolCalls.append([
                         "id": "call_\(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(24))",
                         "type": "function",
-                        "function": ["name": name, "arguments": arguments],
+                        "function": ["name": name, "arguments": LocalChatFormatter.fillToolTitle(name: name, arguments: arguments)],
                     ])
                 }
             }
