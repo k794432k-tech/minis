@@ -257,10 +257,20 @@ jobs:
 
       - name: Resolve Swift packages
         run: |
-          xcodebuild -resolvePackageDependencies \
-            -project src/ios/Minis.xcodeproj -scheme Minis \
-            -derivedDataPath "$DERIVED_DATA" \
-            -skipPackagePluginValidation -skipMacroValidation
+          # Package downloads (GitHub release assets) sometimes fail with a
+          # 5xx; retry instead of failing the whole build.
+          for attempt in 1 2 3 4; do
+            if xcodebuild -resolvePackageDependencies \
+                -project src/ios/Minis.xcodeproj -scheme Minis \
+                -derivedDataPath "$DERIVED_DATA" \
+                -skipPackagePluginValidation -skipMacroValidation; then
+              exit 0
+            fi
+            echo "::warning::Package resolution failed (attempt $attempt), retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
+          echo "::error::Could not resolve Swift packages after 4 attempts"
+          exit 1
 
       - name: Build app (unsigned)
         run: |
