@@ -89,7 +89,12 @@ struct GroupChatView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
             }
-            .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(.immediately)
+            // Tapping anywhere in the conversation closes the keyboard — the
+            // scroll gesture alone does nothing while the list is too short
+            // to scroll.
+            .contentShape(Rectangle())
+            .simultaneousGesture(TapGesture().onEnded { dismissKeyboard() })
             .onChange(of: chat.messages.count) { _ in
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
@@ -188,6 +193,16 @@ struct GroupChatView: View {
                 TextField("Message the group…", text: $input, axis: .vertical)
                     .lineLimit(1...6)
                     .focused($inputFocused)
+                    .toolbar {
+                        ToolbarItemGroup(placement: .keyboard) {
+                            Spacer()
+                            Button {
+                                dismissKeyboard()
+                            } label: {
+                                Image(systemName: "keyboard.chevron.compact.down")
+                            }
+                        }
+                    }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18))
@@ -255,7 +270,13 @@ struct GroupChatView: View {
 
     // MARK: Actions
 
+    private func dismissKeyboard() {
+        inputFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
     private func send() {
+        dismissKeyboard()
         let text = input
         let images = pendingImages
         input = ""
