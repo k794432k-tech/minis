@@ -22,9 +22,11 @@ struct LocalModelsView: View {
 
     @AppStorage(LocalModelSettings.compactPromptKey) private var compactPrompt = true
     @State private var serverRunning = LocalLLMServer.shared.isRunning
-    @State private var loadedName: String? = LlamaEngine.shared.loadedPath.map { ($0 as NSString).lastPathComponent }
-    @State private var unloadMessage: String?
-    @State private var busySeconds: Int?
+    @State private var serverHealthy = LocalLLMServer.shared.isHealthy
+    @State private var engine = LlamaEngine.shared.phase
+    @State private var queued = 0
+    @State private var now = Date()
+    @State private var loadError: String?
     @State private var showLinkSheet = false
     @State private var linkText = ""
     @State private var importing: String?
@@ -34,6 +36,7 @@ struct LocalModelsView: View {
     var body: some View {
         List {
             statusSection
+            engineSection
             modelsSection
             if !downloads.jobs.isEmpty { downloadsSection }
             Section {
@@ -77,11 +80,19 @@ struct LocalModelsView: View {
             }
         }
         .task {
-            // The listener state lives off the main actor; poll it lightly.
+            // Live status: engine and listener state live off the main actor;
+            // read them every second, and test the port itself every 10 s
+            // (a listener can claim "ready" after a long suspension while
+            // nothing answers — the check rebuilds it then).
+            var tick = 0
             while !Task.isCancelled {
+                if tick % 10 == 0 { LocalLLMServer.shared.checkHealth() }
+                tick += 1
                 serverRunning = LocalLLMServer.shared.isRunning
-                loadedName = LlamaEngine.shared.loadedPath.map { ($0 as NSString).lastPathComponent }
-                busySeconds = LlamaEngine.shared.busySince.map { Int(Date().timeIntervalSince($0)) }
+                serverHealthy = LocalLLMServer.shared.isHealthy
+                engine = LlamaEngine.shared.phase
+                queued = LlamaEngine.shared.queuedCount
+                now = Date()
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
@@ -134,10 +145,19 @@ struct LocalModelsView: View {
                 Label("Local Server", systemImage: "server.rack")
                 Spacer()
                 Circle()
-                    .fill(serverRunning ? Color.green : Color.secondary.opacity(0.4))
+                    .fill(serverRunning && serverHealthy ? Color.green : (serverRunning ? Color.orange : Color.secondary.opacity(0.4)))
                     .frame(width: 8, height: 8)
-                (serverRunning ? Text("Running") : Text("Stopped"))
+                (serverRunning && serverHealthy ? Text("Running")
+                    : serverRunning ? Text("Not responding") : Text("Stopped"))
                     .foregroundStyle(.secondary)
+            }
+            if !(serverRunning && serverHealthy) {
+                Button {
+                    LocalModelProviderRegistrar.shared.ensureRegistered()
+                    LocalLLMServer.shared.restart()
+                } label: {
+                    Label("Restart Local Server", systemImage: "arrow.clockwise")
+                }
             }
             HStack {
                 Label("Device Memory", systemImage: "memorychip")
@@ -147,6 +167,144 @@ struct LocalModelsView: View {
             }
         } footer: {
             Text("Downloaded models appear under the provider \"\(LocalModelProviderRegistrar.instanceLabel)\". Pick one in the model picker like any other model. Everything runs on this device; no data leaves it.")
+        }
+    }
+
+    // MARK: Engine (live)
+
+    private var engineSection: some View {
+        Section {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(phaseColor)
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    phaseTitle
+                    if let detail = phaseDetail {
+                        Text(detail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Spacer()
+                if isWorking {
+                    ProgressView().controlSize(.small)
+                }
+            }
+            if case .generating = engine.phase {
+                Button(role: .destructive) {
+                    LlamaEngine.shared.cancelAll()
+                } label: {
+                    Label("Stop Generating", systemImage: "stop.circle")
+                }
+            }
+            Menu {
+                if downloads.models.isEmpty {
+                    Text("No models downloaded yet.")
+                }
+                ForEach(downloads.models) { model in
+                    Button {
+                        load(model)
+                    } label: {
+                        if isLoaded(model) {
+                            Label(model.displayName, systemImage: "checkmark")
+                        } else {
+                            Text(model.displayName)
+                        }
+                    }
+                }
+            } label: {
+                Label("Load Model", systemImage: "square.and.arrow.down.on.square")
+            }
+            .disabled(downloads.models.isEmpty || isLoading)
+            Button {
+                LlamaEngine.shared.unloadAll()
+            } label: {
+                Label("Unload Model from Memory", systemImage: "eject")
+            }
+            .disabled(engine.phase == .idle)
+            if let loadError {
+                Text(loadError).font(.caption).foregroundStyle(.red)
+            }
+        } header: {
+            Text("Model Status")
+        } footer: {
+            Text("Live state of the on-device engine. Loading a model here makes the first reply faster; a chat that uses another model swaps it automatically.")
+        }
+    }
+
+    private var elapsed: Int { max(0, Int(now.timeIntervalSince(engine.since))) }
+    private var isLoading: Bool { if case .loading = engine.phase { return true }; return false }
+    private var isWorking: Bool {
+        switch engine.phase {
+        case .loading, .generating: return true
+        default: return false
+        }
+    }
+    /// A generation that has run well past the per-request limit is stuck.
+    private var isStuck: Bool {
+        if case .generating = engine.phase { return elapsed > Int(LlamaEngine.maxRequestSeconds) + 30 }
+        return false
+    }
+
+    private func isLoaded(_ model: LocalModelFile) -> Bool {
+        LlamaEngine.shared.loadedPath == model.primaryURL.path
+    }
+
+    private var phaseColor: Color {
+        if isStuck { return .red }
+        switch engine.phase {
+        case .idle: return Color.secondary.opacity(0.4)
+        case .loading: return .orange
+        case .ready: return .green
+        case .generating: return .blue
+        }
+    }
+
+    @ViewBuilder private var phaseTitle: some View {
+        if isStuck {
+            Text("Not responding — restart the app")
+        } else {
+            switch engine.phase {
+            case .idle: Text("Nothing loaded")
+            case .loading: Text("Loading… \(elapsed)s")
+            case .ready: Text("Loaded, idle")
+            case .generating: Text("Generating… \(elapsed)s")
+            }
+        }
+    }
+
+    private var phaseDetail: String? {
+        var parts: [String] = []
+        switch engine.phase {
+        case .idle: return nil
+        case .loading(let name), .ready(let name): parts.append(name)
+        case .generating(let name):
+            parts.append(name)
+            if engine.chunks > 0 { parts.append(AppLocalized("\(engine.chunks) tokens")) }
+        }
+        if queued > 0 { parts.append(AppLocalized("\(queued) waiting")) }
+        return parts.joined(separator: " · ")
+    }
+
+    private func load(_ model: LocalModelFile) {
+        loadError = nil
+        LocalModelProviderRegistrar.shared.ensureRegistered()
+        let config = LlamaEngine.Config(
+            path: model.primaryURL.path,
+            contextLength: LocalModelSettings.contextLength,
+            gpuOffload: LocalModelSettings.gpuOffload,
+            mmprojPath: nil
+        )
+        Task {
+            do {
+                try await LlamaEngine.shared.preload(config: config)
+            } catch {
+                loadError = error.localizedDescription
+            }
+            engine = LlamaEngine.shared.phase
         }
     }
 
@@ -225,36 +383,6 @@ struct LocalModelsView: View {
             Picker("Hugging Face Endpoint", selection: $hfEndpoint) {
                 Text("huggingface.co").tag(LocalModelSettings.defaultHuggingFaceEndpoint)
                 Text("hf-mirror.com").tag(LocalModelSettings.huggingFaceMirrorEndpoint)
-            }
-            HStack {
-                Text("In Memory")
-                Spacer()
-                Text(loadedName ?? AppLocalized("Nothing loaded"))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            if let busySeconds {
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text("Generating… \(busySeconds)s")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Stop") { LlamaEngine.shared.cancelAll() }
-                        .buttonStyle(.borderless)
-                }
-            }
-            Button("Unload Model from Memory") {
-                LlamaEngine.shared.unloadAll {
-                    Task { @MainActor in
-                        loadedName = nil
-                        unloadMessage = AppLocalized("Model unloaded. It loads again the next time a chat uses it.")
-                    }
-                }
-            }
-            // Always tappable: it also stops a running generation.
-            if let unloadMessage {
-                Text(unloadMessage).font(.caption).foregroundStyle(.secondary)
             }
         } header: {
             Text("Inference")

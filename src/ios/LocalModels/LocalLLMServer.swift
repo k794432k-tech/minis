@@ -44,10 +44,88 @@ final class LocalLLMServer: @unchecked Sendable {
         queue.async { self.startListener() }
         if observers.isEmpty {
             let center = NotificationCenter.default
+            // While suspended iOS can reclaim the listening socket and the
+            // listener keeps reporting "ready" although nothing is accepted
+            // any more. Close it on the way out and open a fresh one on the
+            // way back, then check that it really answers.
+            observers.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { [weak self] _ in
+                self?.queue.async {
+                    self?.listener?.cancel()
+                    self?.listener = nil
+                    self?.setRunning(false)
+                    self?.setHealthy(false)
+                }
+            })
+            observers.append(center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil) { [weak self] _ in
+                self?.restart()
+            })
             observers.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { [weak self] _ in
                 self?.queue.async { self?.startListener() }
+                self?.queue.asyncAfter(deadline: .now() + 1) { self?.checkHealth() }
             })
         }
+    }
+
+    /// Throws the listener away and opens a new one.
+    func restart() {
+        queue.async {
+            self.listener?.cancel()
+            self.listener = nil
+            self.setRunning(false)
+            self.setHealthy(false)
+            self.startListener()
+        }
+    }
+
+    // MARK: Health
+
+    private var _healthy = false
+    private var _lastCheck: Date?
+    /// Whether the last self-test got an HTTP answer from the port.
+    var isHealthy: Bool { stateLock.lock(); defer { stateLock.unlock() }; return _healthy }
+    var lastHealthCheck: Date? { stateLock.lock(); defer { stateLock.unlock() }; return _lastCheck }
+    private func setHealthy(_ value: Bool) {
+        stateLock.lock(); _healthy = value; _lastCheck = Date(); stateLock.unlock()
+    }
+
+    /// Connects to the port like a client would. If nothing answers while the
+    /// app is in the foreground, the listener is rebuilt.
+    func checkHealth(repair: Bool = true, completion: (@Sendable (Bool) -> Void)? = nil) {
+        guard let port = NWEndpoint.Port(rawValue: Self.port) else { return }
+        let conn = NWConnection(host: "127.0.0.1", port: port, using: .tcp)
+        let done = LlamaCancelFlag()
+        let finish: @Sendable (Bool) -> Void = { [weak self] ok in
+            guard done.claim() else { return }
+            conn.cancel()
+            self?.setHealthy(ok)
+            if !ok && repair {
+                logger.error("[Server] health check failed — restarting the listener")
+                DispatchQueue.main.async {
+                    if UIApplication.shared.applicationState != .background { self?.restart() }
+                }
+            }
+            completion?(ok)
+        }
+        conn.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                let req = "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+                conn.send(content: Data(req.utf8), completion: .contentProcessed { error in
+                    if error != nil { finish(false); return }
+                    conn.receive(minimumIncompleteLength: 1, maximumLength: 64) { data, _, _, _ in
+                        finish((data?.isEmpty == false))
+                    }
+                })
+            case .failed, .cancelled:
+                finish(false)
+            case .waiting:
+                finish(false)
+            default:
+                break
+            }
+        }
+        conn.start(queue: DispatchQueue.global(qos: .utility))
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) { finish(false) }
     }
 
     func stop() {
@@ -81,6 +159,7 @@ final class LocalLLMServer: @unchecked Sendable {
                 switch state {
                 case .ready:
                     self?.setRunning(true)
+                    self?.setHealthy(true)
                     logger.info("[Server] listening on 127.0.0.1:\(Self.port)")
                 case .failed(let error):
                     self?.setRunning(false)

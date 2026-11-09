@@ -115,6 +115,38 @@ final class LlamaEngine: @unchecked Sendable {
         return _loadedPath
     }
 
+    /// What the engine is doing right now, for the live status in Settings.
+    enum Phase: Equatable {
+        case idle
+        case loading(String)
+        case ready(String)
+        case generating(String)
+    }
+    private var _phase: Phase = .idle
+    private var _phaseSince = Date()
+    private var _generatedChunks = 0
+    var phase: (phase: Phase, since: Date, chunks: Int) {
+        statusLock.lock(); defer { statusLock.unlock() }
+        return (_phase, _phaseSince, _generatedChunks)
+    }
+    private func setPhase(_ p: Phase) {
+        statusLock.lock()
+        if _phase != p { _phase = p; _phaseSince = Date() }
+        if case .generating = p {} else { _generatedChunks = 0 }
+        statusLock.unlock()
+    }
+    private func countChunk() {
+        statusLock.lock(); _generatedChunks += 1; statusLock.unlock()
+    }
+    private var loadedName: String {
+        ((loadedPath ?? "") as NSString).lastPathComponent
+    }
+    /// Number of requests waiting behind the running one.
+    var queuedCount: Int {
+        activeLock.lock(); defer { activeLock.unlock() }
+        return max(0, activeFlags.count - (busySince == nil ? 0 : 1))
+    }
+
     /// Cancel flags of requests that are running or waiting for the queue,
     /// so "unload" can stop them instead of waiting behind them.
     private let activeLock = NSLock()
@@ -143,6 +175,11 @@ final class LlamaEngine: @unchecked Sendable {
     var busySince: Date? { busyLock.lock(); defer { busyLock.unlock() }; return _busySince }
     private func setBusy(_ on: Bool) {
         busyLock.lock(); _busySince = on ? Date() : nil; busyLock.unlock()
+        if on {
+            setPhase(.generating(loadedName))
+        } else {
+            setPhase(loadedPath == nil ? .idle : .ready(loadedName))
+        }
     }
 
     private func track(_ flag: LlamaCancelFlag) {
@@ -195,7 +232,11 @@ final class LlamaEngine: @unchecked Sendable {
                 do {
                     try self.ensureLoaded(config)
                     let prompt = try self.applyTemplate(messages)
-                    let emit: (LlamaGenerationEvent) -> Void = { continuation.yield($0) }
+                    self.setPhase(.generating(self.loadedName))
+                    let emit: (LlamaGenerationEvent) -> Void = { event in
+                        if case .text = event { self.countChunk() }
+                        continuation.yield(event)
+                    }
                     if images.isEmpty {
                         try self.run(prompt: prompt, sampling: sampling, cancel: cancelFlag, emit: emit)
                     } else {
@@ -267,6 +308,7 @@ final class LlamaEngine: @unchecked Sendable {
         }
 
         unload()
+        setPhase(.loading((wanted.path as NSString).lastPathComponent))
         var mparams = llama_model_default_params()
         #if targetEnvironment(simulator)
         mparams.n_gpu_layers = 0
@@ -275,6 +317,7 @@ final class LlamaEngine: @unchecked Sendable {
         #endif
         let start = Date()
         guard let loaded = llama_model_load_from_file(wanted.path, mparams) else {
+            setPhase(.idle)
             throw LlamaEngineError.modelLoadFailed(wanted.path)
         }
         model = loaded
@@ -288,6 +331,7 @@ final class LlamaEngine: @unchecked Sendable {
         }
         config = wanted
         statusLock.lock(); _loadedPath = wanted.path; statusLock.unlock()
+        setPhase(busySince == nil ? .ready(loadedName) : .generating(loadedName))
         logger.info("[Load] \((wanted.path as NSString).lastPathComponent) ctx=\(wanted.contextLength) gpu=\(wanted.gpuOffload) in \(String(format: "%.1f", Date().timeIntervalSince(start)))s")
     }
 
@@ -345,6 +389,7 @@ final class LlamaEngine: @unchecked Sendable {
         config = nil
         resetCaches()
         statusLock.lock(); _loadedPath = nil; statusLock.unlock()
+        setPhase(.idle)
     }
 
     // MARK: Chat template (queue)
@@ -724,4 +769,11 @@ final class LlamaCancelFlag: @unchecked Sendable {
     private var cancelled = false
     var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
     func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+    /// Cancels and returns true only for the first caller.
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if cancelled { return false }
+        cancelled = true
+        return true
+    }
 }
