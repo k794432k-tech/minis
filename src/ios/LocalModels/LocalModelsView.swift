@@ -227,6 +227,8 @@ struct LocalModelsView: View {
             .disabled(engine.phase == .idle)
             if let loadError {
                 Text(loadError).font(.caption).foregroundStyle(.red)
+            } else if engine.phase != .idle, let note = LlamaEngine.shared.loadNote {
+                Text(note).font(.caption).foregroundStyle(.orange)
             }
         } header: {
             Text("Model Status")

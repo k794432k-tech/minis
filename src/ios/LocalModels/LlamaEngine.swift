@@ -16,6 +16,7 @@
 import CoreGraphics
 import CryptoKit
 import Foundation
+import os
 import ImageIO
 import llama
 import UIKit
@@ -30,6 +31,7 @@ enum LlamaEngineError: LocalizedError {
     case templateFailed
     case visionUnavailable
     case imageDecodeFailed
+    case notEnoughMemory(neededMB: Int, availableMB: Int)
 
     var errorDescription: String? {
         switch self {
@@ -48,6 +50,8 @@ enum LlamaEngineError: LocalizedError {
             return AppLocalized("Could not load the vision projector for this model, so it cannot read images.")
         case .imageDecodeFailed:
             return AppLocalized("Could not read one of the attached images.")
+        case .notEnoughMemory(let need, let avail):
+            return AppLocalized("This model needs about \(need) MB of memory but iOS only lets the app use about \(avail) MB right now, so loading it would crash the app. Pick a smaller model or quantization (for example a 1–4B Q4_K_M), lower the context length, or close other apps and try again.")
         }
     }
 }
@@ -294,7 +298,7 @@ final class LlamaEngine: @unchecked Sendable {
                 if let context { llama_free(context) }
                 context = nil
                 resetCaches()
-                try createContext(contextLength: wanted.contextLength)
+                try createContext(contextLength: try fittedContextLength(wanted.contextLength))
             }
             if config.mmprojPath != wanted.mmprojPath {
                 if let mtmdContext { mtmd_free(mtmdContext) }
@@ -309,11 +313,36 @@ final class LlamaEngine: @unchecked Sendable {
 
         unload()
         setPhase(.loading((wanted.path as NSString).lastPathComponent))
+
+        // [T-llama-memory-guard] iOS kills the app outright (no error, no
+        // crash log in-app) once it passes its memory limit. With Metal the
+        // whole weight file is wired into GPU memory and counts against that
+        // limit, so a model bigger than what is left crashes ~seconds into
+        // loading. Check first: fall back to CPU (weights stay a clean,
+        // evictable file mapping), and refuse if even that cannot fit.
+        let fileBytes = Self.modelBytes(wanted.path)
+        let available = Self.availableMemory()
+        var useGPU = wanted.gpuOffload
+        var note: String?
+        if let available {
+            let mb = { (b: Int64) in Int(b / 1_048_576) }
+            if useGPU, fileBytes + Self.gpuHeadroom > available {
+                useGPU = false
+                note = AppLocalized("Not enough memory for GPU offload (model \(mb(fileBytes)) MB, available \(mb(available)) MB) — running on the CPU, which is slower.")
+                logger.warning("[Load] GPU offload skipped: model=\(mb(fileBytes))MB available=\(mb(available))MB")
+            }
+            let physical = Int64(ProcessInfo.processInfo.physicalMemory)
+            if fileBytes > physical * 7 / 10 {
+                setPhase(.idle)
+                throw LlamaEngineError.notEnoughMemory(neededMB: mb(fileBytes), availableMB: mb(available))
+            }
+        }
         var mparams = llama_model_default_params()
+        mparams.use_mmap = true
         #if targetEnvironment(simulator)
         mparams.n_gpu_layers = 0
         #else
-        mparams.n_gpu_layers = wanted.gpuOffload ? 999 : 0
+        mparams.n_gpu_layers = useGPU ? 999 : 0
         #endif
         let start = Date()
         guard let loaded = llama_model_load_from_file(wanted.path, mparams) else {
@@ -323,16 +352,87 @@ final class LlamaEngine: @unchecked Sendable {
         model = loaded
         vocab = llama_model_get_vocab(loaded)
         do {
-            try createContext(contextLength: wanted.contextLength)
+            let fitted = try fittedContextLength(wanted.contextLength)
+            if fitted < wanted.contextLength {
+                let msg = AppLocalized("Context lowered to \(fitted) tokens to fit in memory.")
+                note = note.map { $0 + " " + msg } ?? msg
+            }
+            try createContext(contextLength: fitted)
             try loadProjector(wanted)
         } catch {
             unload()
             throw error
         }
+        setLoadNote(note)
         config = wanted
         statusLock.lock(); _loadedPath = wanted.path; statusLock.unlock()
         setPhase(busySince == nil ? .ready(loadedName) : .generating(loadedName))
         logger.info("[Load] \((wanted.path as NSString).lastPathComponent) ctx=\(wanted.contextLength) gpu=\(wanted.gpuOffload) in \(String(format: "%.1f", Date().timeIntervalSince(start)))s")
+    }
+
+    // MARK: Memory (queue)
+
+    /// Room kept free for Metal command buffers, compute buffers and the app.
+    private static let gpuHeadroom: Int64 = 700 * 1_048_576
+    private static let contextHeadroom: Int64 = 500 * 1_048_576
+
+    /// Bytes the app may still allocate before iOS terminates it.
+    static func availableMemory() -> Int64? {
+        #if targetEnvironment(simulator)
+        return nil
+        #else
+        let a = Int64(os_proc_available_memory())
+        return a > 0 ? a : nil
+        #endif
+    }
+
+    /// Size of the model file, including the other parts of a split GGUF
+    /// (name-00001-of-00003.gguf).
+    static func modelBytes(_ path: String) -> Int64 {
+        let fm = FileManager.default
+        let size = { (p: String) -> Int64 in
+            ((try? fm.attributesOfItem(atPath: p))?[.size] as? NSNumber)?.int64Value ?? 0
+        }
+        let url = URL(fileURLWithPath: path)
+        let name = url.lastPathComponent
+        guard let r = name.range(of: #"-\d{5}-of-\d{5}\.gguf$"#, options: .regularExpression) else {
+            return size(path)
+        }
+        let stem = String(name[..<r.lowerBound])
+        let dir = url.deletingLastPathComponent()
+        let parts = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
+        return parts.filter { $0.hasPrefix(stem + "-") && $0.hasSuffix(".gguf") }
+            .reduce(0) { $0 + size(dir.appendingPathComponent($1).path) }
+    }
+
+    /// The largest context (up to `wanted`) whose KV cache fits in what is
+    /// left after the weights are loaded. Throws if not even 512 fits.
+    private func fittedContextLength(_ wanted: Int) throws -> Int {
+        guard let model, let available = Self.availableMemory() else { return wanted }
+        let layers = Int64(llama_model_n_layer(model))
+        let heads = Int64(max(1, llama_model_n_head(model)))
+        let kvHeads = Int64(max(1, llama_model_n_head_kv(model)))
+        let embd = Int64(llama_model_n_embd(model))
+        guard layers > 0, embd > 0 else { return wanted }
+        // K and V, f16, per token.
+        let perToken = 2 * layers * kvHeads * (embd / heads) * 2
+        let budget = available - Self.contextHeadroom
+        let fits = perToken > 0 ? Int(max(0, budget) / perToken) : wanted
+        let fitted = min(wanted, fits / 256 * 256)
+        logger.info("[Load] kv/token=\(perToken / 1024)KB available=\(available / 1_048_576)MB ctx wanted=\(wanted) fits=\(fits)")
+        if fitted < 512 {
+            throw LlamaEngineError.notEnoughMemory(
+                neededMB: Int((Self.contextHeadroom + perToken * 512) / 1_048_576),
+                availableMB: Int(available / 1_048_576))
+        }
+        return fitted
+    }
+
+    private var _loadNote: String?
+    /// What the last load had to change to fit (CPU fallback, smaller context).
+    var loadNote: String? { statusLock.lock(); defer { statusLock.unlock() }; return _loadNote }
+    private func setLoadNote(_ note: String?) {
+        statusLock.lock(); _loadNote = note; statusLock.unlock()
     }
 
     private func createContext(contextLength: Int) throws {

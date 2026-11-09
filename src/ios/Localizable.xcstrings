@@ -285084,6 +285084,54 @@
           }
         }
       }
+    },
+    "This model needs about %lld MB of memory but iOS only lets the app use about %lld MB right now, so loading it would crash the app. Pick a smaller model or quantization (for example a 1–4B Q4_K_M), lower the context length, or close other apps and try again." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "这个模型大约需要 %lld MB 内存，但 iOS 现在只允许 App 使用约 %lld MB，硬载入会直接闪退。请换更小的模型或量化版本（比如 1–4B 的 Q4_K_M）、调低上下文长度，或者关掉其他 App 再试。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "這個模型大約需要 %lld MB 記憶體，但 iOS 現在只允許 App 使用約 %lld MB，硬載入會直接閃退。請換更小的模型或量化版本（例如 1–4B 的 Q4_K_M）、調低上下文長度，或關閉其他 App 再試。"
+          }
+        }
+      }
+    },
+    "Not enough memory for GPU offload (model %lld MB, available %lld MB) — running on the CPU, which is slower." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "内存不够放进 GPU（模型 %lld MB，可用 %lld MB），已改用 CPU 运行，速度会慢一些。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "記憶體不足以放進 GPU（模型 %lld MB，可用 %lld MB），已改用 CPU 執行，速度會慢一些。"
+          }
+        }
+      }
+    },
+    "Context lowered to %lld tokens to fit in memory." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为了放得下，上下文已降到 %lld tokens。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "為了放得下，上下文已降到 %lld tokens。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
