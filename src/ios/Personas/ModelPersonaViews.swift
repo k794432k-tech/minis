@@ -68,27 +68,39 @@ struct ModelPersonaListView: View {
             // One folding section per provider: tap the provider to show
             // its models.
             ForEach(sections) { section in
-                Section(isExpanded: expandedBinding(section.id)) {
-                    ForEach(section.entries) { entry in
-                        NavigationLink {
-                            ModelPersonaEditView(entryId: entry.id)
-                        } label: {
-                            ModelPersonaRow(entry: entry, persona: store.persona(for: entry.id))
+                let open = expandedBinding(section.id)
+                Section {
+                    if open.wrappedValue {
+                        ForEach(section.entries) { entry in
+                            NavigationLink {
+                                ModelPersonaEditView(entryId: entry.id)
+                            } label: {
+                                ModelPersonaRow(entry: entry, persona: store.persona(for: entry.id))
+                            }
                         }
                     }
                 } header: {
-                    HStack {
-                        Text(section.title)
-                        Spacer()
-                        let withPersona = section.entries.filter { store.persona(for: $0.id).map { !$0.isEmpty } ?? false }.count
-                        Text(withPersona > 0 ? "\(withPersona)/\(section.entries.count)" : "\(section.entries.count)")
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) { open.wrappedValue.toggle() }
+                    } label: {
+                        HStack {
+                            Text(section.title)
+                            Spacer()
+                            let withPersona = section.entries.filter { store.persona(for: $0.id).map { !$0.isEmpty } ?? false }.count
+                            Text(withPersona > 0 ? "\(withPersona)/\(section.entries.count)" : "\(section.entries.count)")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .rotationEffect(.degrees(open.wrappedValue ? 90 : 0))
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }
-        .listStyle(.sidebar)
         .searchable(text: $query)
         .navigationTitle("Model Personas")
         .navigationBarTitleDisplayMode(.inline)
