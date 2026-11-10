@@ -263,7 +263,7 @@ final class LlamaEngine: @unchecked Sendable {
                             // produced, so it is safe to answer from the text
                             // instead of failing the whole request with a 500.
                             guard Self.isVisionError(error), !cancelFlag.isCancelled else { throw error }
-                            self.logger.error("[Vision] \(error.localizedDescription) — answering from text only")
+                            logger.error("[Vision] \(error.localizedDescription) — answering from text only")
                             if let context = self.context {
                                 llama_memory_clear(llama_get_memory(context), true)
                             }
