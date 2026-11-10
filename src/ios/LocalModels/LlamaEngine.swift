@@ -210,8 +210,6 @@ final class LlamaEngine: @unchecked Sendable {
     /// `mediaMarker` placeholders appear in the messages.
     /// Errors that mean "could not use the image", so the request can retry
     /// as a text-only reply instead of failing.
-    private final class EmittedFlag { var value = false }
-
     static func isVisionError(_ error: Error) -> Bool {
         guard let e = error as? LlamaEngineError else { return false }
         switch e {
@@ -256,20 +254,15 @@ final class LlamaEngine: @unchecked Sendable {
                     if images.isEmpty {
                         try self.run(prompt: prompt, sampling: sampling, cancel: cancelFlag, emit: emit)
                     } else {
-                        let emitted = EmittedFlag()
-                        let watch: (LlamaGenerationEvent) -> Void = { event in
-                            if case .text(let t) = event, !t.isEmpty { emitted.value = true }
-                            emit(event)
-                        }
                         do {
                             try self.runMultimodal(prompt: prompt, images: images, sampling: sampling,
-                                                   cancel: cancelFlag, emit: watch)
+                                                   cancel: cancelFlag, emit: emit)
                         } catch {
-                            guard Self.isVisionError(error), !emitted.value, !cancelFlag.isCancelled else { throw error }
-                            // The model could not read the image (missing or bad
-                            // projector, decode or memory). Rather than fail the
-                            // whole request, answer from the text so the user
-                            // still gets a reply.
+                            // Vision errors (missing or bad projector, image
+                            // decode, tokenize) all happen before any token is
+                            // produced, so it is safe to answer from the text
+                            // instead of failing the whole request with a 500.
+                            guard Self.isVisionError(error), !cancelFlag.isCancelled else { throw error }
                             self.logger.error("[Vision] \(error.localizedDescription) — answering from text only")
                             if let context = self.context {
                                 llama_memory_clear(llama_get_memory(context), true)
