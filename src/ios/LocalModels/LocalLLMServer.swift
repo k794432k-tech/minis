@@ -361,8 +361,13 @@ final class LocalLLMServer: @unchecked Sendable {
             responder.endEventStream()
         } catch {
             logger.error("[Chat] generation failed: \(error.localizedDescription)")
-            let errorBody: [String: Any] = ["message": error.localizedDescription, "type": "server_error", "code": 500]
-            responder.sendEvent(["error": errorBody])
+            // Show the reason in the chat (clients often render a bare 500
+            // otherwise) and close the stream cleanly.
+            if !responder.isClosed {
+                responder.sendEvent(chunk(delta: ["content": "⚠️ " + error.localizedDescription]))
+                responder.sendEvent(chunk(delta: [:], finish: "stop"))
+            }
+            responder.sendEvent(["error": ["message": error.localizedDescription, "type": "server_error", "code": 500]])
             responder.endEventStream()
         }
     }

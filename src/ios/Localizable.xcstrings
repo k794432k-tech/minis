@@ -285212,6 +285212,22 @@
           }
         }
       }
+    },
+    "(I couldn't read the attached image on this device, so I'm answering from the text only.)" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（我在这台设备上无法读取附带的图片，所以只根据文字回答。）"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "（我在這台裝置上無法讀取附帶的圖片，所以只根據文字回答。）"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

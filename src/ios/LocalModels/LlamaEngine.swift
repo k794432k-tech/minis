@@ -208,6 +208,16 @@ final class LlamaEngine: @unchecked Sendable {
     /// task stops generation at the next token.
     /// `images` are encoded image files (JPEG/PNG/HEIC…) in the order their
     /// `mediaMarker` placeholders appear in the messages.
+    /// Errors that mean "could not use the image", so the request can retry
+    /// as a text-only reply instead of failing.
+    static func isVisionError(_ error: Error) -> Bool {
+        guard let e = error as? LlamaEngineError else { return false }
+        switch e {
+        case .visionUnavailable, .imageDecodeFailed, .templateFailed: return true
+        default: return false
+        }
+    }
+
     func generate(messages: [LlamaChatMessage], images: [Data] = [], config: Config, sampling: LlamaSampling)
         -> AsyncThrowingStream<LlamaGenerationEvent, Error>
     {
@@ -244,8 +254,29 @@ final class LlamaEngine: @unchecked Sendable {
                     if images.isEmpty {
                         try self.run(prompt: prompt, sampling: sampling, cancel: cancelFlag, emit: emit)
                     } else {
-                        try self.runMultimodal(prompt: prompt, images: images, sampling: sampling,
-                                               cancel: cancelFlag, emit: emit)
+                        var emitted = false
+                        let watch: (LlamaGenerationEvent) -> Void = { event in
+                            if case .text(let t) = event, !t.isEmpty { emitted = true }
+                            emit(event)
+                        }
+                        do {
+                            try self.runMultimodal(prompt: prompt, images: images, sampling: sampling,
+                                                   cancel: cancelFlag, emit: watch)
+                        } catch where Self.isVisionError(error) && !emitted && !cancelFlag.isCancelled {
+                            // The model could not read the image (no/again a bad
+                            // projector, decode or memory). Rather than fail the
+                            // whole request, answer from the text so the user
+                            // still gets a reply.
+                            self.logger.error("[Vision] \(error.localizedDescription) — answering from text only")
+                            if let context = self.context {
+                                llama_memory_clear(llama_get_memory(context), true)
+                            }
+                            self.resetCaches()
+                            let note = AppLocalized("(I couldn't read the attached image on this device, so I'm answering from the text only.)")
+                            let textPrompt = prompt.replacingOccurrences(of: Self.mediaMarker, with: note)
+                            emit(.text("⚠️ " + note + "\n\n"))
+                            try self.run(prompt: textPrompt, sampling: sampling, cancel: cancelFlag, emit: emit)
+                        }
                     }
                     continuation.finish()
                 } catch {
@@ -320,7 +351,10 @@ final class LlamaEngine: @unchecked Sendable {
         // limit, so a model bigger than what is left crashes ~seconds into
         // loading. Check first: fall back to CPU (weights stay a clean,
         // evictable file mapping), and refuse if even that cannot fit.
-        let fileBytes = Self.modelBytes(wanted.path)
+        var fileBytes = Self.modelBytes(wanted.path)
+        if let mmproj = wanted.mmprojPath {
+            fileBytes += Self.modelBytes(mmproj)
+        }
         let available = Self.availableMemory()
         var useGPU = wanted.gpuOffload
         var note: String?
