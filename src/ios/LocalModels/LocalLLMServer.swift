@@ -428,9 +428,28 @@ final class LocalLLMServer: @unchecked Sendable {
         ])
     }
 
+    /// Turn markers that must always halt generation. Some finetunes (e.g.
+    /// ChatML Gemma builds) emit these as plain text instead of a real
+    /// end-of-generation token, so without this the model never stops and
+    /// keeps role-playing both sides of the conversation.
+    static let defaultStops = [
+        "<|im_end|>", "<|im_start|>",
+        "<end_of_turn>", "<start_of_turn>",
+        "<|eot_id|>", "<|start_header_id|>",
+        "<|endoftext|>", "<|end|>", "<|user|>", "<|assistant|>",
+        "<tool_response>", "</tool_response>",
+    ]
+
     private static func stopStrings(_ raw: Any?) -> [String] {
-        if let s = raw as? String, !s.isEmpty { return [s] }
-        return ((raw as? [String]) ?? []).filter { !$0.isEmpty }
+        var stops = defaultStops
+        if let s = raw as? String, !s.isEmpty {
+            stops.append(s)
+        } else if let list = raw as? [String] {
+            stops.append(contentsOf: list.filter { !$0.isEmpty })
+        }
+        // Longest first so "</tool_response>" matches before "<tool_response>".
+        var seen = Set<String>()
+        return stops.filter { seen.insert($0).inserted }.sorted { $0.count > $1.count }
     }
 }
 
