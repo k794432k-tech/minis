@@ -210,6 +210,8 @@ final class LlamaEngine: @unchecked Sendable {
     /// `mediaMarker` placeholders appear in the messages.
     /// Errors that mean "could not use the image", so the request can retry
     /// as a text-only reply instead of failing.
+    private final class EmittedFlag { var value = false }
+
     static func isVisionError(_ error: Error) -> Bool {
         guard let e = error as? LlamaEngineError else { return false }
         switch e {
@@ -254,16 +256,17 @@ final class LlamaEngine: @unchecked Sendable {
                     if images.isEmpty {
                         try self.run(prompt: prompt, sampling: sampling, cancel: cancelFlag, emit: emit)
                     } else {
-                        var emitted = false
+                        let emitted = EmittedFlag()
                         let watch: (LlamaGenerationEvent) -> Void = { event in
-                            if case .text(let t) = event, !t.isEmpty { emitted = true }
+                            if case .text(let t) = event, !t.isEmpty { emitted.value = true }
                             emit(event)
                         }
                         do {
                             try self.runMultimodal(prompt: prompt, images: images, sampling: sampling,
                                                    cancel: cancelFlag, emit: watch)
-                        } catch where Self.isVisionError(error) && !emitted && !cancelFlag.isCancelled {
-                            // The model could not read the image (no/again a bad
+                        } catch {
+                            guard Self.isVisionError(error), !emitted.value, !cancelFlag.isCancelled else { throw error }
+                            // The model could not read the image (missing or bad
                             // projector, decode or memory). Rather than fail the
                             // whole request, answer from the text so the user
                             // still gets a reply.
