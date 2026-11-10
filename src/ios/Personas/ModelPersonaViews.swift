@@ -14,6 +14,19 @@ import SwiftUI
 struct ModelPersonaListView: View {
     @ObservedObject private var store = ModelPersonaStore.shared
     @State private var query = ""
+    /// Providers whose models are shown; all start folded.
+    @State private var expanded: Set<String> = []
+
+    private var isSearching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    private func expandedBinding(_ id: String) -> Binding<Bool> {
+        Binding(
+            get: { isSearching || expanded.contains(id) },
+            set: { open in
+                if open { expanded.insert(id) } else { expanded.remove(id) }
+            }
+        )
+    }
 
     private var sections: [GroupChatModelCatalog.Section] {
         let all = GroupChatModelCatalog.sections()
@@ -52,8 +65,10 @@ struct ModelPersonaListView: View {
                     }
                 }
             }
+            // One folding section per provider: tap the provider to show
+            // its models.
             ForEach(sections) { section in
-                Section(section.title) {
+                Section(isExpanded: expandedBinding(section.id)) {
                     ForEach(section.entries) { entry in
                         NavigationLink {
                             ModelPersonaEditView(entryId: entry.id)
@@ -61,9 +76,19 @@ struct ModelPersonaListView: View {
                             ModelPersonaRow(entry: entry, persona: store.persona(for: entry.id))
                         }
                     }
+                } header: {
+                    HStack {
+                        Text(section.title)
+                        Spacer()
+                        let withPersona = section.entries.filter { store.persona(for: $0.id).map { !$0.isEmpty } ?? false }.count
+                        Text(withPersona > 0 ? "\(withPersona)/\(section.entries.count)" : "\(section.entries.count)")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
                 }
             }
         }
+        .listStyle(.sidebar)
         .searchable(text: $query)
         .navigationTitle("Model Personas")
         .navigationBarTitleDisplayMode(.inline)
