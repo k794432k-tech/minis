@@ -761,7 +761,7 @@ final class BackgroundKeepAliveManager: NSObject, ObservableObject, CLLocationMa
     @discardableResult
     func reviveSilentAudioIfDead(source: String) -> Bool {
         let sessionCount = SessionActivityTracker.shared.busySessions.count
-        let wantsKeepAlive = isActive && keepAliveWanted
+        let wantsKeepAlive = (isActive || localServerKeepAlive) && keepAliveWanted
             && appIsInBackground && silentAudioSuspendCount == 0 && (sessionCount > 0 || localServerKeepAlive)
         switch SilentAudioWatchdog.decide(wantsKeepAlive: wantsKeepAlive, markedActive: silentAudioActive,
                                           engineRunning: audioEngine?.isRunning ?? false) {
@@ -1547,13 +1547,13 @@ final class BackgroundKeepAliveManager: NSObject, ObservableObject, CLLocationMa
         // skip the resume call. If keepalive should be active and silent
         // audio is NOT running yet the count is stuck > 2, treat it as leaked
         // and reset so we can re-engage keepalive.
-        if isActive && appIsInBackground && keepAliveWanted
+        if (isActive || localServerKeepAlive) && appIsInBackground && keepAliveWanted
             && !silentAudioActive && silentAudioSuspendCount > 2 {
             logger.warning("[BackgroundKeepAlive] silentAudioSuspendCount=\(self.silentAudioSuspendCount) looks leaked — resetting to 0")
             silentAudioSuspendCount = 0
         }
 
-        let shouldPlay = isActive && keepAliveWanted && appIsInBackground && silentAudioSuspendCount == 0
+        let shouldPlay = (isActive || localServerKeepAlive) && keepAliveWanted && appIsInBackground && silentAudioSuspendCount == 0
         let sessions = SessionActivityTracker.shared.busySessions.count
         let reason: String = {
             if !isActive { return "isActive=false" }
