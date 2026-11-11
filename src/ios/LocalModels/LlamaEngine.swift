@@ -159,8 +159,16 @@ final class LlamaEngine: @unchecked Sendable {
     /// Longest a single request may run before it is stopped, so one runaway
     /// generation cannot hold the engine (and every later load/unload) hostage.
     static let maxRequestSeconds: TimeInterval = 300
+    /// The hard limit for one request. With Enhanced Background on, a reply may
+    /// legitimately sit paused while the app is in the background waiting to
+    /// use the GPU again, so the limit is longer.
+    static var requestTimeLimit: TimeInterval {
+        enhancedBackgroundEffective ? 1800 : maxRequestSeconds
+    }
 
     private var backgroundObserver: NSObjectProtocol?
+    private var foregroundObserver: NSObjectProtocol?
+    private var activeObserver: NSObjectProtocol?
 
     private init() {
         // When the app is backgrounded, a decode in flight can stall or fail
@@ -172,11 +180,22 @@ final class LlamaEngine: @unchecked Sendable {
         backgroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil
         ) { [weak self] _ in
+            self?.appInBackground = true
             if Self.enhancedBackgroundEffective {
-                logger.info("[Engine] backgrounded with Enhanced Background on — keeping generation running")
+                logger.info("[Engine] backgrounded with Enhanced Background on — pausing GPU decode until foreground")
             } else {
                 self?.cancelAll()
             }
+        }
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.appInBackground = false
+        }
+        activeObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil
+        ) { [weak self] _ in
+            self?.appInBackground = false
         }
     }
 
@@ -186,6 +205,46 @@ final class LlamaEngine: @unchecked Sendable {
     static var enhancedBackgroundEffective: Bool {
         let d = UserDefaults.standard
         return d.bool(forKey: "enhancedBackgroundExecution") && d.bool(forKey: "backgroundSpeakEnabled")
+    }
+
+    // MARK: Background-safe decoding
+
+    /// Whether the app is currently in the background. iOS refuses GPU work
+    /// there, so a decode (text or image) returns a negative error. Updated by
+    /// the notifications set up in init; read off the main thread by the
+    /// decode loop, so it is guarded by its own lock.
+    private let bgStateLock = NSLock()
+    private var _appInBackground = false
+    private var appInBackground: Bool {
+        get { bgStateLock.lock(); defer { bgStateLock.unlock() }; return _appInBackground }
+        set { bgStateLock.lock(); _appInBackground = newValue; bgStateLock.unlock() }
+    }
+
+    /// Blocks the engine queue until the app is back in the foreground (so GPU
+    /// work is allowed again), the request is cancelled, or the request time
+    /// limit passes. Returns true if the foreground was reached.
+    private func waitForForeground(cancel: LlamaCancelFlag) -> Bool {
+        let deadline = Date().addingTimeInterval(Self.requestTimeLimit)
+        while appInBackground, !cancel.isCancelled, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.25)
+        }
+        return !appInBackground && !cancel.isCancelled
+    }
+
+    /// Runs a decode and, if it fails only because the app is in the
+    /// background with Enhanced Background on, waits for the foreground and
+    /// retries instead of failing the whole reply. A failed decode does not
+    /// advance the KV cache, so retrying the same batch is safe.
+    private func resilientDecode(cancel: LlamaCancelFlag, _ body: () -> Int32) -> Int32 {
+        var rc = body()
+        var attempts = 0
+        while rc < 0, !cancel.isCancelled, Self.enhancedBackgroundEffective, appInBackground, attempts < 240 {
+            logger.info("[Decode] rc=\(rc) in background — waiting for foreground to retry")
+            if !waitForForeground(cancel: cancel) { break }
+            rc = body()
+            attempts += 1
+        }
+        return rc
     }
 
     /// True while a request is being processed on the engine queue.
@@ -241,7 +300,7 @@ final class LlamaEngine: @unchecked Sendable {
             continuation.onTermination = { _ in cancelFlag.cancel() }
             track(cancelFlag)
             // Hard time limit for this request.
-            DispatchQueue.global().asyncAfter(deadline: .now() + Self.maxRequestSeconds) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.requestTimeLimit) {
                 cancelFlag.cancel()
             }
             queue.async {
@@ -625,8 +684,10 @@ final class LlamaEngine: @unchecked Sendable {
         while index < tokens.count {
             if cancel.isCancelled { return }
             let count = min(batchSize, tokens.count - index)
-            let rc: Int32 = tokens.withUnsafeMutableBufferPointer { buf in
-                llama_decode(context, llama_batch_get_one(buf.baseAddress! + index, Int32(count)))
+            let rc: Int32 = resilientDecode(cancel: cancel) {
+                tokens.withUnsafeMutableBufferPointer { buf in
+                    llama_decode(context, llama_batch_get_one(buf.baseAddress! + index, Int32(count)))
+                }
             }
             if rc != 0 {
                 llama_memory_clear(memory, true)
@@ -641,8 +702,10 @@ final class LlamaEngine: @unchecked Sendable {
 
         try sampleLoop(sampling: sampling, maxNew: maxNew, cancel: cancel, emit: emit) { token in
             var t = token
-            let rc = withUnsafeMutablePointer(to: &t) { ptr in
-                llama_decode(context, llama_batch_get_one(ptr, 1))
+            let rc = self.resilientDecode(cancel: cancel) {
+                withUnsafeMutablePointer(to: &t) { ptr in
+                    llama_decode(context, llama_batch_get_one(ptr, 1))
+                }
             }
             if rc == 0 { self.cachedTokens.append(token) }
             return rc
@@ -730,7 +793,9 @@ final class LlamaEngine: @unchecked Sendable {
             if cancel.isCancelled { return }
             let chunk = mtmd_input_chunks_get(chunks, i)
             var newPast: llama_pos = 0
-            let evalRC = mtmd_helper_eval_chunk_single(mtmd, context, chunk, nPast, 0, 512, i == count - 1, &newPast)
+            let evalRC = resilientDecode(cancel: cancel) {
+                mtmd_helper_eval_chunk_single(mtmd, context, chunk, nPast, 0, 512, i == count - 1, &newPast)
+            }
             if evalRC != 0 {
                 llama_memory_clear(memory, true)
                 resetCaches()
@@ -754,7 +819,7 @@ final class LlamaEngine: @unchecked Sendable {
             batch.n_seq_id[0] = 1
             batch.seq_id[0]![0] = 0
             batch.logits[0] = 1
-            let rc = llama_decode(context, batch)
+            let rc = self.resilientDecode(cancel: cancel) { llama_decode(context, batch) }
             if rc == 0 { nPast += 1 }
             return rc
         }
