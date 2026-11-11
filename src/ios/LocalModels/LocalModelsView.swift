@@ -32,10 +32,13 @@ struct LocalModelsView: View {
     @State private var importing: String?
     @State private var pendingDelete: LocalModelFile?
     @State private var errorMessage: String?
+    @State private var backgroundServer = LocalModelSettings.backgroundServer
+    @State private var showKey = false
 
     var body: some View {
         List {
             statusSection
+            backgroundServerSection
             engineSection
             modelsSection
             if !downloads.jobs.isEmpty { downloadsSection }
@@ -171,6 +174,53 @@ struct LocalModelsView: View {
     }
 
     // MARK: Engine (live)
+
+    // MARK: Background server
+
+    @ViewBuilder private var backgroundServerSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { backgroundServer },
+                set: { on in
+                    backgroundServer = on
+                    LocalModelSettings.backgroundServer = on
+                    if on {
+                        LocalModelProviderRegistrar.shared.ensureRegistered()
+                        LocalLLMServer.shared.start()
+                    }
+                }
+            )) {
+                Label("Keep Server Running in Background", systemImage: "server.rack")
+            }
+            if backgroundServer {
+                LabeledContent("Address") {
+                    Text(LocalLLMServer.baseURL + "/v1")
+                        .font(.footnote.monospaced())
+                        .textSelection(.enabled)
+                }
+                if let key = LocalModelProviderRegistrar.shared.serverAPIKey {
+                    HStack {
+                        Text("API Key")
+                        Spacer()
+                        Text(showKey ? key : "••••••••")
+                            .font(.footnote.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Button {
+                            UIPasteboard.general.string = key
+                        } label: { Image(systemName: "doc.on.doc") }
+                            .buttonStyle(.borderless)
+                    }
+                    .onTapGesture { showKey.toggle() }
+                }
+            }
+        } header: {
+            Text("On-device API Server")
+        } footer: {
+            Text("Other apps on this device can call the loaded model at this OpenAI-compatible address while Minis is in the background. It uses the background keep-alive (some battery) and needs a model already loaded. Note: image recognition and GPU inference don't run while in the background — use a CPU model for background serving. Turn this off when you don't need it.")
+        }
+    }
 
     private var engineSection: some View {
         Section {

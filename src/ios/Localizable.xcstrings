@@ -285260,6 +285260,70 @@
           }
         }
       }
+    },
+    "Keep Server Running in Background" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "后台常驻服务器"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "背景常駐伺服器"
+          }
+        }
+      }
+    },
+    "On-device API Server" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本地 API 服务器"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "本機 API 伺服器"
+          }
+        }
+      }
+    },
+    "Address" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "地址"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "位址"
+          }
+        }
+      }
+    },
+    "Other apps on this device can call the loaded model at this OpenAI-compatible address while Minis is in the background. It uses the background keep-alive (some battery) and needs a model already loaded. Note: image recognition and GPU inference don't run while in the background — use a CPU model for background serving. Turn this off when you don't need it." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Minis 在后台时，这台设备上的其他 App 可以通过这个 OpenAI 兼容地址调用已载入的模型。它会使用后台保活（会耗一些电），并且需要先载入一个模型。注意：识图和 GPU 推理在后台无法运行——后台服务请用 CPU 模型。不需要时请关掉。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Minis 在背景時，這台裝置上的其他 App 可以透過這個 OpenAI 相容位址呼叫已載入的模型。它會使用背景保活（會耗一些電），並且需要先載入一個模型。注意：識圖和 GPU 推理在背景無法執行——背景服務請用 CPU 模型。不需要時請關閉。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

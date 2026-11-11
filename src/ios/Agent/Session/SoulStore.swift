@@ -1025,6 +1025,9 @@ extension Notification.Name {
     /// Posted when the active model persona or the default-identity choice
     /// changes, so the assistant header / title refresh their avatar + name.
     static let chatIdentityChanged = Notification.Name("MinisChatIdentityChanged")
+    /// Posted when the "keep the on-device server alive in the background"
+    /// setting changes, so the keep-alive re-evaluates.
+    static let localBackgroundServerChanged = Notification.Name("MinisLocalBackgroundServerChanged")
 }
 
 // MARK: - System prompt composition

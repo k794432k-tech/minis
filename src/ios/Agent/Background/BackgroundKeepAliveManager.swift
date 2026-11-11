@@ -105,6 +105,15 @@ final class BackgroundKeepAliveManager: NSObject, ObservableObject, CLLocationMa
         enhancedBackgroundEnabled && backgroundSpeakEnabled
     }
 
+    /// The on-device model server is set to stay resident in the background so
+    /// other apps can call it. Like Background Speak, this keeps the silent
+    /// audio session alive so iOS doesn't suspend the app.
+    var localServerKeepAlive: Bool {
+        UserDefaults.standard.bool(forKey: "localLLM.backgroundServer")
+    }
+    /// Either reason keeps the app alive in the background.
+    private var keepAliveWanted: Bool { backgroundSpeakEnabled || localServerKeepAlive }
+
     /// When enabled, posts local notifications when agent tasks start and complete.
     @Published var backgroundNotificationsEnabled: Bool = {
         // Default to true if key hasn't been set
@@ -429,6 +438,15 @@ final class BackgroundKeepAliveManager: NSObject, ObservableObject, CLLocationMa
         configureLocationManager()
         logger.info("[BackgroundKeepAlive] Setup: enabled=\(self.enhancedBackgroundEnabled), locationTracking=\(self.locationTrackingEnabled)")
 
+        // The on-device server "stay resident in background" switch keeps the
+        // app alive the same way Background Speak does.
+        NotificationCenter.default.addObserver(forName: .localBackgroundServerChanged, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.objectWillChange.send()
+            self.evaluateSilentAudio(caller: "localServerToggle")
+            self.evaluateBackgroundActivitySession()
+        }
+
         if #available(iOS 17.0, *), !Self.debugAutoRetractDisabled {
             let probe = CLBackgroundActivitySession()
             probe.invalidate()
@@ -743,8 +761,8 @@ final class BackgroundKeepAliveManager: NSObject, ObservableObject, CLLocationMa
     @discardableResult
     func reviveSilentAudioIfDead(source: String) -> Bool {
         let sessionCount = SessionActivityTracker.shared.busySessions.count
-        let wantsKeepAlive = isActive && backgroundSpeakEnabled
-            && appIsInBackground && silentAudioSuspendCount == 0 && sessionCount > 0
+        let wantsKeepAlive = isActive && keepAliveWanted
+            && appIsInBackground && silentAudioSuspendCount == 0 && (sessionCount > 0 || localServerKeepAlive)
         switch SilentAudioWatchdog.decide(wantsKeepAlive: wantsKeepAlive, markedActive: silentAudioActive,
                                           engineRunning: audioEngine?.isRunning ?? false) {
         case .none:
@@ -1529,17 +1547,17 @@ final class BackgroundKeepAliveManager: NSObject, ObservableObject, CLLocationMa
         // skip the resume call. If keepalive should be active and silent
         // audio is NOT running yet the count is stuck > 2, treat it as leaked
         // and reset so we can re-engage keepalive.
-        if isActive && appIsInBackground && backgroundSpeakEnabled
+        if isActive && appIsInBackground && keepAliveWanted
             && !silentAudioActive && silentAudioSuspendCount > 2 {
             logger.warning("[BackgroundKeepAlive] silentAudioSuspendCount=\(self.silentAudioSuspendCount) looks leaked — resetting to 0")
             silentAudioSuspendCount = 0
         }
 
-        let shouldPlay = isActive && backgroundSpeakEnabled && appIsInBackground && silentAudioSuspendCount == 0
+        let shouldPlay = isActive && keepAliveWanted && appIsInBackground && silentAudioSuspendCount == 0
         let sessions = SessionActivityTracker.shared.busySessions.count
         let reason: String = {
             if !isActive { return "isActive=false" }
-            if !backgroundSpeakEnabled { return "bgSpeak=false" }
+            if !keepAliveWanted { return "bgSpeak=false" }
             if !appIsInBackground { return "bg=false" }
             if silentAudioSuspendCount > 0 { return "suspended=\(silentAudioSuspendCount)" }
             return "ok"

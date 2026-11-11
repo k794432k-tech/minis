@@ -278,18 +278,20 @@ final class LocalLLMServer: @unchecked Sendable {
         let events = LlamaEngine.shared.generate(messages: prompt.messages, images: prompt.images,
                                                  config: config, sampling: sampling)
 
+        let toolNames = Set(offeredTools.compactMap { ($0["function"] as? [String: Any])?["name"] as? String })
         if stream {
             await streamResponse(events: events, responder: responder, id: completionId, created: created,
-                                 modelId: model.id, parseTools: useTools, stops: stops, includeUsage: includeUsage)
+                                 modelId: model.id, parseTools: useTools, stops: stops, includeUsage: includeUsage,
+                                 toolNames: toolNames)
         } else {
             await jsonResponse(events: events, responder: responder, id: completionId, created: created,
-                               modelId: model.id, parseTools: useTools, stops: stops)
+                               modelId: model.id, parseTools: useTools, stops: stops, toolNames: toolNames)
         }
     }
 
     private func streamResponse(events: AsyncThrowingStream<LlamaGenerationEvent, Error>, responder: LocalHTTPResponder,
                                 id: String, created: Int, modelId: String, parseTools: Bool,
-                                stops: [String], includeUsage: Bool) async {
+                                stops: [String], includeUsage: Bool, toolNames: Set<String> = []) async {
         responder.beginEventStream()
 
         func chunk(delta: [String: Any], finish: String? = nil) -> [String: Any] {
@@ -304,6 +306,7 @@ final class LocalLLMServer: @unchecked Sendable {
         responder.sendEvent(chunk(delta: ["role": "assistant", "content": ""]))
 
         var parser = ToolCallStreamParser()
+        if parseTools { parser.knownToolNames = toolNames }
         var stopFilter = StopStringFilter(stops: stops)
         var toolIndex = 0
         var promptTokens = 0
@@ -373,8 +376,10 @@ final class LocalLLMServer: @unchecked Sendable {
     }
 
     private func jsonResponse(events: AsyncThrowingStream<LlamaGenerationEvent, Error>, responder: LocalHTTPResponder,
-                              id: String, created: Int, modelId: String, parseTools: Bool, stops: [String]) async {
+                              id: String, created: Int, modelId: String, parseTools: Bool, stops: [String],
+                              toolNames: Set<String> = []) async {
         var parser = ToolCallStreamParser()
+        if parseTools { parser.knownToolNames = toolNames }
         var stopFilter = StopStringFilter(stops: stops)
         var text = ""
         var toolCalls: [[String: Any]] = []

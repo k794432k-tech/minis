@@ -124,6 +124,13 @@ final class LocalModelProviderRegistrar {
         }
     }
 
+    /// The on-device server's API key (for showing other apps how to connect).
+    var serverAPIKey: String? {
+        guard let instance else { return nil }
+        let key = ProviderKeychainHelper.loadAPIKey(instanceId: instance.id)
+        return (key?.isEmpty == false) ? key : nil
+    }
+
     /// Checks the bearer token of a request against the instance's API key.
     nonisolated static func isAuthorized(_ header: String?) -> Bool {
         guard let header, header.lowercased().hasPrefix("bearer ") else { return false }

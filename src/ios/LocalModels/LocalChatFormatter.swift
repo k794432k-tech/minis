@@ -356,6 +356,26 @@ struct ToolCallStreamParser {
     private var callBody = ""
     private(set) var sawToolCall = false
 
+    /// Names of the tools offered this request. Small models (e.g. MiniCPM,
+    /// some abliterated Gemma builds) often print a tool call with the angle
+    /// brackets dropped — `name="shell_execute"> name="command">date` — which
+    /// no tag matches, so it leaks as text. Knowing the names lets us spot and
+    /// recover that shape.
+    var knownToolNames: Set<String> = []
+    private var inBareCall = false
+
+    /// Regex matching a bracket-less call opener for a known tool, e.g.
+    /// `name="shell_execute">` possibly prefixed by a stray `<invoke`.
+    private func bareOpenRange(in text: String) -> Range<String.Index>? {
+        guard !knownToolNames.isEmpty else { return nil }
+        let names = knownToolNames.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
+        guard let re = try? NSRegularExpression(pattern: "<?\\s*(?:invoke\\s+)?name\\s*=\\s*\"(?:\(names))\"\\s*>") else { return nil }
+        let ns = text as NSString
+        let m = re.firstMatch(in: text, range: NSRange(location: 0, length: ns.length))
+        guard let m, let r = Range(m.range, in: text) else { return nil }
+        return r
+    }
+
     mutating func feed(_ chunk: String) -> [Output] {
         buffer += chunk
         for d in Self.dropped where buffer.contains(d) {
@@ -387,7 +407,22 @@ struct ToolCallStreamParser {
                 callBody = ""
                 continue
             }
-            let keep = (Self.tags.map(\.open) + Self.dropped)
+            // Bracket-less call from a small model: enter a bare-call state
+            // that runs to the end of the reply (or the next such opener).
+            if let r = bareOpenRange(in: buffer) {
+                let before = String(buffer[..<r.lowerBound])
+                if !before.isEmpty { outputs.append(.text(before)) }
+                buffer = String(buffer[r.lowerBound...]) // keep the `name="..."` for parsing
+                inBareCall = true
+                callBody = ""
+                return outputs
+            }
+            if inBareCall {
+                callBody += buffer
+                buffer = ""
+                return outputs
+            }
+            let keep = (Self.tags.map(\.open) + Self.dropped + ["name=\""])
                 .map { Self.partialSuffixLength(buffer, of: $0) }.max() ?? 0
             let emit = String(buffer.dropLast(keep))
             if !emit.isEmpty { outputs.append(.text(emit)) }
@@ -404,11 +439,49 @@ struct ToolCallStreamParser {
             buffer = ""
             current = nil
             outputs.append(contentsOf: finishCall(tag))
+        } else if inBareCall {
+            callBody += buffer
+            buffer = ""
+            inBareCall = false
+            outputs.append(contentsOf: finishBareCalls(callBody))
+            callBody = ""
         } else if !buffer.isEmpty {
             outputs.append(.text(buffer))
             buffer = ""
         }
         return outputs
+    }
+
+    /// Parses one or more bracket-less calls out of `body`, e.g.
+    /// `name="shell_execute"> name="command">date name="file_read"> name="path">/x`.
+    private mutating func finishBareCalls(_ body: String) -> [Output] {
+        // Split into segments each starting at a known tool name.
+        let names = knownToolNames.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: "|")
+        guard !names.isEmpty,
+              let re = try? NSRegularExpression(pattern: "<?\\s*(?:invoke\\s+)?name\\s*=\\s*\"(\(names))\"\\s*>") else {
+            return body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [.text(body)]
+        }
+        let ns = body as NSString
+        let matches = re.matches(in: body, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else {
+            return body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [.text(body)]
+        }
+        var outputs: [Output] = []
+        for (i, m) in matches.enumerated() {
+            let name = ns.substring(with: m.range(at: 1))
+            let start = m.range.location + m.range.length
+            let end = (i + 1 < matches.count) ? matches[i + 1].range.location : ns.length
+            let segment = ns.substring(with: NSRange(location: start, length: end - start))
+            outputs.append(.toolCall(name: name, arguments: Self.parseBareParams(segment)))
+            sawToolCall = true
+        }
+        return outputs
+    }
+
+    /// Extracts `name="k">value` pairs (brackets optional) from a segment.
+    static func parseBareParams(_ segment: String) -> String {
+        let pairs = allMatches(#"(?:<?\s*(?:parameter\s+)?)name\s*=\s*"([^"]+)"\s*>([^<]*?)(?=(?:<?\s*(?:parameter\s+)?name\s*=\s*")|</|<\||$)"#, in: segment)
+        return encodeArguments(pairs.map { ($0.0, $0.1.trimmingCharacters(in: .whitespacesAndNewlines)) })
     }
 
     private mutating func finishCall(_ tag: Tag) -> [Output] {

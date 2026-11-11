@@ -215,6 +215,7 @@ enum LocalModelSettings {
     static let toolCallingKey = "localLLM.toolCalling"
     static let compactPromptKey = "localLLM.compactPrompt"
     static let huggingFaceEndpointKey = "localLLM.huggingFaceEndpoint"
+    static let backgroundServerKey = "localLLM.backgroundServer"
 
     static let contextLengthOptions = [2048, 4096, 8192, 16384, 32768]
     static let maxOutputOptions = [512, 1024, 2048, 4096, 8192]
@@ -252,6 +253,17 @@ enum LocalModelSettings {
 
     static var toolCalling: Bool {
         defaults.object(forKey: toolCallingKey) as? Bool ?? true
+    }
+
+    /// Keep the on-device model's local HTTP server (127.0.0.1:47811) running
+    /// while Minis is in the background, so other apps on the device can call
+    /// it. Uses the background keep-alive, so it draws some battery.
+    static var backgroundServer: Bool {
+        get { defaults.bool(forKey: backgroundServerKey) }
+        set {
+            defaults.set(newValue, forKey: backgroundServerKey)
+            NotificationCenter.default.post(name: .localBackgroundServerChanged, object: nil)
+        }
     }
 
     static var huggingFaceEndpoint: String {

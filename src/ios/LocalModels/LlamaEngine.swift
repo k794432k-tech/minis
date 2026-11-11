@@ -204,6 +204,9 @@ final class LlamaEngine: @unchecked Sendable {
     /// background notification can consult it without hopping to the main actor.
     static var enhancedBackgroundEffective: Bool {
         let d = UserDefaults.standard
+        // Either the general Enhanced Background setting, or the on-device
+        // server kept resident for other apps, keeps generation alive.
+        if d.bool(forKey: "localLLM.backgroundServer") { return true }
         return d.bool(forKey: "enhancedBackgroundExecution") && d.bool(forKey: "backgroundSpeakEnabled")
     }
 
