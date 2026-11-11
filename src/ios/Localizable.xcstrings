@@ -285228,6 +285228,38 @@
           }
         }
       }
+    },
+    "Use as Default Chat Identity" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用作对话默认身份"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用作對話預設身分"
+          }
+        }
+      }
+    },
+    "When on, opening a new chat uses this model and shows its name, avatar and soul — separate from the built-in Minis identity. Only one model can be the default at a time. New chats also open on the on-device model currently loaded in memory, if any." : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开后，新建对话会使用这个模型，并显示它的名字、头像和灵魂——与内置的 Minis 身份分开。同一时间只能有一个模型作为默认。另外，如果内存里已载入了本地模型，新建对话也会直接用它。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟後，新建對話會使用這個模型，並顯示它的名字、頭像和靈魂——與內建的 Minis 身分分開。同一時間只能有一個模型作為預設。另外，若記憶體中已載入本機模型，新建對話也會直接使用它。"
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

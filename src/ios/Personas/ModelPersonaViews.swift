@@ -216,6 +216,19 @@ struct ModelPersonaEditView: View {
             }
 
             Section {
+                Toggle("Use as Default Chat Identity", isOn: Binding(
+                    get: { store.isDefaultIdentity(entryId) },
+                    set: { on in
+                        if on, !draft.enabled { draft.enabled = true; store.save(draft) }
+                        store.setDefaultIdentity(entryId, on: on)
+                    }
+                ))
+                .disabled(draft.isEmpty && !store.isDefaultIdentity(entryId))
+            } footer: {
+                Text("When on, opening a new chat uses this model and shows its name, avatar and soul — separate from the built-in Minis identity. Only one model can be the default at a time. New chats also open on the on-device model currently loaded in memory, if any.")
+            }
+
+            Section {
                 editor($draft.soul, placeholder: Self.soulPlaceholder)
             } header: {
                 Text("Soul")

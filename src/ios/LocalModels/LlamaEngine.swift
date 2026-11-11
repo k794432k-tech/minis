@@ -163,14 +163,29 @@ final class LlamaEngine: @unchecked Sendable {
     private var backgroundObserver: NSObjectProtocol?
 
     private init() {
-        // iOS does not allow GPU work in the background; a decode in flight
-        // when the app is backgrounded can fail or stall. Stop generations
-        // instead of leaving the queue blocked.
+        // When the app is backgrounded, a decode in flight can stall or fail
+        // because iOS restricts background GPU work. By default we stop
+        // generations so the queue isn't left blocked. But if the user turned
+        // on Enhanced Background (which keeps the app alive with a silent
+        // audio session), let the current generation keep running instead of
+        // cutting the reply off mid-sentence.
         backgroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil
         ) { [weak self] _ in
-            self?.cancelAll()
+            if Self.enhancedBackgroundEffective {
+                logger.info("[Engine] backgrounded with Enhanced Background on — keeping generation running")
+            } else {
+                self?.cancelAll()
+            }
         }
+    }
+
+    /// Nonisolated read of the Enhanced Background setting (master switch plus
+    /// the silent-audio keep-alive that actually prevents suspension), so the
+    /// background notification can consult it without hopping to the main actor.
+    static var enhancedBackgroundEffective: Bool {
+        let d = UserDefaults.standard
+        return d.bool(forKey: "enhancedBackgroundExecution") && d.bool(forKey: "backgroundSpeakEnabled")
     }
 
     /// True while a request is being processed on the engine queue.

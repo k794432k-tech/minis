@@ -25,7 +25,7 @@ import UniformTypeIdentifiers
 struct BridgedAssistantHeaderV3: View {
     @ObservedObject var message: ChatMessage
     var maxWidth: CGFloat = 0
-    @State private var soulMeta: SoulMetadata = SoulStore.cachedMetadata
+    @State private var soulMeta: SoulMetadata = ChatIdentityCenter.effective
     /// [T-ios-assistant-header-open-soul] Injected, NOT read from the
     /// environment.
     ///
@@ -89,7 +89,10 @@ struct BridgedAssistantHeaderV3: View {
         .accessibilityLabel(AppLocalized("Open Soul settings"))
         .accessibilityHint(AppLocalized("Change the assistant's name, icon and personality"))
         .onReceive(NotificationCenter.default.publisher(for: .soulMdChanged)) { _ in
-            soulMeta = SoulStore.cachedMetadata
+            soulMeta = ChatIdentityCenter.effective
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .chatIdentityChanged)) { _ in
+            soulMeta = ChatIdentityCenter.effective
         }
         .padding(.top, 4)
         .padding(.bottom, 0)

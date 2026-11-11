@@ -39,6 +39,19 @@ final class LocalModelProviderRegistrar {
         ProviderConfigStore.shared.instances.first { Self.isLocalBaseURL($0.customBaseURL) }
     }
 
+    /// The provider entry id of the on-device model currently loaded in
+    /// memory, so a newly opened chat can default to "the model I just
+    /// loaded". nil when nothing is loaded or it isn't registered.
+    func loadedModelEntryId() -> String? {
+        guard let path = LlamaEngine.shared.loadedPath,
+              let instance,
+              let file = LocalModelCatalog.shared.models.first(where: { $0.primaryURL.path == path }) else { return nil }
+        let store = ProviderConfigStore.shared
+        return store.modelEntries.first {
+            $0.providerInstanceId == instance.id && $0.model.id == file.id && !$0.isHidden
+        }?.id
+    }
+
     nonisolated static func isLocalBaseURL(_ url: String?) -> Bool {
         guard var s = url?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else { return false }
         while s.hasSuffix("/") { s.removeLast() }

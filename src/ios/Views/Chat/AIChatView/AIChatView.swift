@@ -1345,6 +1345,9 @@ struct AIChatView: View {
         }
         .onAppear {
             wireComposerActions()
+            // The assistant header / title show this model's persona identity
+            // (avatar + name) when it has one.
+            ChatIdentityCenter.setCurrentEntry(vm.resolveCurrentEntry()?.id)
             // [OpenMinis#433] Back on screen with a page popped off it: this
             // new chat is in use again, so no other new chat may take it.
             ViewModelCache.shared.unparkNewChat(vm)

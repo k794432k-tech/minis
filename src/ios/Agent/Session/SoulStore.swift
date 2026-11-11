@@ -1022,6 +1022,9 @@ extension Notification.Name {
     /// Posted on the main thread whenever SOUL.md has been (re-)written
     /// via SoulStore. Listeners refresh derived UI state.
     static let soulMdChanged = Notification.Name("MinisSoulMdChanged")
+    /// Posted when the active model persona or the default-identity choice
+    /// changes, so the assistant header / title refresh their avatar + name.
+    static let chatIdentityChanged = Notification.Name("MinisChatIdentityChanged")
 }
 
 // MARK: - System prompt composition
@@ -1172,13 +1175,15 @@ enum SystemPromptBuilder {
 /// any place that previously hard-coded "Minis" as a label.
 @MainActor
 struct AssistantSoulName: View {
-    @State private var name: String = SoulStore.cachedMetadata.name.isEmpty
-        ? "Minis" : SoulStore.cachedMetadata.name
+    @State private var name: String = ChatIdentityCenter.effective.name.isEmpty
+        ? "Minis" : ChatIdentityCenter.effective.name
     var body: some View {
         Text(name)
-            .onReceive(NotificationCenter.default.publisher(for: .soulMdChanged)) { _ in
-                let n = SoulStore.cachedMetadata.name
-                name = n.isEmpty ? "Minis" : n
-            }
+            .onReceive(NotificationCenter.default.publisher(for: .soulMdChanged)) { _ in refresh() }
+            .onReceive(NotificationCenter.default.publisher(for: .chatIdentityChanged)) { _ in refresh() }
+    }
+    private func refresh() {
+        let n = ChatIdentityCenter.effective.name
+        name = n.isEmpty ? "Minis" : n
     }
 }

@@ -320,6 +320,26 @@ extension AIChatViewModel {
             }
         }
 
+        // 2d. A brand-new chat (no binding, no remembered model) opens on the
+        //     on-device model currently loaded in memory, if any, otherwise on
+        //     the model set as the default chat identity. "Open a chat and it
+        //     uses the model I just loaded."
+        if cachedSessionModelId.isEmpty, helperConfig == nil,
+           store.binding(for: sessionId ?? "") == nil {
+            if let localId = LocalModelProviderRegistrar.shared.loadedModelEntryId(),
+               let entry = store.entry(for: localId) {
+                logger.info("🔀RESOLVE new chat → loaded on-device model entry=\(localId)")
+                return entry
+            }
+            if let identityId = ModelPersonaStore.shared.defaultIdentityEntryId,
+               let entry = store.entry(for: identityId),
+               let inst = store.instance(for: entry.providerInstanceId),
+               inst.isEnabled, !entry.isHidden {
+                logger.info("🔀RESOLVE new chat → default-identity model entry=\(identityId)")
+                return entry
+            }
+        }
+
         // 3. Try default group
         let resolveId = sessionId ?? "__resolve__"
         if let groupId = store.defaultPrimaryGroupId,

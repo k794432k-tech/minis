@@ -80,6 +80,12 @@ final class ModelPersonaStore: ObservableObject {
 
     @Published private(set) var personas: [String: ModelPersona] = [:]
 
+    /// `ModelEntry.id` whose persona is used as the identity for newly opened
+    /// chats (name, avatar, soul), separate from the app's built-in SOUL.md
+    /// identity. nil = use the built-in one. Only one model can hold it.
+    @Published private(set) var defaultIdentityEntryId: String?
+    private static let defaultIdentityKey = "ModelPersona.defaultIdentityEntryId"
+
     private static let directory: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let dir = base.appendingPathComponent("ModelPersonas", isDirectory: true)
@@ -89,6 +95,44 @@ final class ModelPersonaStore: ObservableObject {
 
     private init() {
         personas = Self.loadAll()
+        let saved = UserDefaults.standard.string(forKey: Self.defaultIdentityKey)
+        // Drop a stale pointer to a model whose persona was turned off/emptied.
+        defaultIdentityEntryId = (saved.flatMap { activePersona(for: $0) != nil ? saved : nil })
+    }
+
+    // MARK: Default identity
+
+    func isDefaultIdentity(_ entryId: String) -> Bool { defaultIdentityEntryId == entryId }
+
+    /// Makes this model's persona the identity for new chats (or clears it).
+    /// Only one at a time, so setting one replaces any previous choice.
+    func setDefaultIdentity(_ entryId: String?, on: Bool) {
+        let newValue: String?
+        if on { newValue = entryId } else { newValue = (defaultIdentityEntryId == entryId ? nil : defaultIdentityEntryId) }
+        guard newValue != defaultIdentityEntryId else { return }
+        defaultIdentityEntryId = newValue
+        if let newValue {
+            UserDefaults.standard.set(newValue, forKey: Self.defaultIdentityKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: Self.defaultIdentityKey)
+        }
+        NotificationCenter.default.post(name: .chatIdentityChanged, object: nil)
+    }
+
+    /// Name + avatar (as a SOUL-icon data URI) to show for a model that has an
+    /// enabled persona, for the chat header and title. nil = use the default.
+    func effectiveIdentity(for entryId: String?) -> (name: String?, icon: String?)? {
+        guard let entryId, let persona = activePersona(for: entryId) else { return nil }
+        var icon: String?
+        if let file = persona.avatarFile, !file.isEmpty {
+            if let cached = iconURICache[file] {
+                icon = cached
+            } else if let image = avatar(for: entryId), case .success(let uri) = SoulIconImage.encode(image) {
+                iconURICache[file] = uri
+                icon = uri
+            }
+        }
+        return (persona.effectiveName, icon)
     }
 
     // MARK: Lookup
@@ -111,6 +155,9 @@ final class ModelPersonaStore: ObservableObject {
         return dir
     }
     private let avatarCache = NSCache<NSString, UIImage>()
+    /// Encoded SOUL-icon data URIs, keyed by avatar file name, so the chat
+    /// header doesn't re-encode the image on every refresh.
+    private var iconURICache: [String: String] = [:]
 
     /// Stores picked image data as a small square JPEG; returns its file name.
     static func saveAvatarImage(_ data: Data) -> String? {
@@ -137,6 +184,8 @@ final class ModelPersonaStore: ObservableObject {
     static func removeAvatarFile(_ name: String?) {
         guard let name, !name.isEmpty else { return }
         try? FileManager.default.removeItem(at: avatarsDirectory.appendingPathComponent(name))
+        shared.iconURICache[name] = nil
+        shared.avatarCache.removeObject(forKey: name as NSString)
     }
 
     /// The avatar set for a model (whether or not its persona is switched on).
@@ -155,11 +204,19 @@ final class ModelPersonaStore: ObservableObject {
         p.updatedAt = Date()
         personas[p.id] = p
         Self.write(p)
+        // A persona that is turned off or emptied can no longer be the chat
+        // identity.
+        if defaultIdentityEntryId == p.id, activePersona(for: p.id) == nil {
+            setDefaultIdentity(nil, on: false)
+        }
+        NotificationCenter.default.post(name: .chatIdentityChanged, object: nil)
     }
 
     func delete(entryId: String) {
         personas[entryId] = nil
         try? FileManager.default.removeItem(at: Self.fileURL(entryId))
+        if defaultIdentityEntryId == entryId { setDefaultIdentity(nil, on: false) }
+        NotificationCenter.default.post(name: .chatIdentityChanged, object: nil)
     }
 
     /// Adds a memory. Automatic memories are dropped when the model has
