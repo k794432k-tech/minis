@@ -305,6 +305,19 @@ final class LocalLLMServer: @unchecked Sendable {
 
         responder.sendEvent(chunk(delta: ["role": "assistant", "content": ""]))
 
+        // A slow cold model load or a long prompt can leave the connection
+        // silent long enough for a client's config test to time out. Send an
+        // SSE comment every 3 s until the first real output arrives.
+        let gotOutput = HeartbeatFlag()
+        let heartbeat = Task { [weak responder] in
+            while !Task.isCancelled, !(responder?.isClosed ?? true), !gotOutput.value {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                if gotOutput.value { break }
+                responder?.sendComment("keep-alive")
+            }
+        }
+        defer { heartbeat.cancel() }
+
         var parser = ToolCallStreamParser()
         if parseTools { parser.knownToolNames = toolNames }
         var stopFilter = StopStringFilter(stops: stops)
@@ -315,6 +328,7 @@ final class LocalLLMServer: @unchecked Sendable {
 
         func emit(_ outputs: [ToolCallStreamParser.Output]) {
             for output in outputs {
+                gotOutput.value = true
                 switch output {
                 case .text(let text):
                     if !text.isEmpty { responder.sendEvent(chunk(delta: ["content": text])) }
@@ -338,6 +352,7 @@ final class LocalLLMServer: @unchecked Sendable {
                 switch event {
                 case .promptEvaluated(let p, _):
                     promptTokens = p
+                    gotOutput.value = true
                 case .text(let piece):
                     let (visible, stopped) = stopFilter.feed(piece)
                     // The parser also runs without tools so stray tool-call
@@ -549,6 +564,16 @@ private final class LocalHTTPRequestReader {
 /// Writes responses. Streaming responses use a close-delimited body
 /// (`Connection: close`, no Content-Length), which every HTTP/1.1 client
 /// accepts and keeps the server free of chunked encoding.
+/// Reference flag shared with the heartbeat task.
+final class HeartbeatFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _value = false
+    var value: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _value }
+        set { lock.lock(); _value = newValue; lock.unlock() }
+    }
+}
+
 final class LocalHTTPResponder: @unchecked Sendable {
     private let connection: NWConnection
     private let lock = NSLock()
@@ -584,6 +609,13 @@ final class LocalHTTPResponder: @unchecked Sendable {
     func beginEventStream() {
         let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
         connection.send(content: Data(head.utf8), completion: .contentProcessed { _ in })
+    }
+
+    /// An SSE comment line — ignored by clients but keeps the connection from
+    /// idling out while the model loads / processes the prompt.
+    func sendComment(_ text: String) {
+        guard !isClosed else { return }
+        connection.send(content: Data(": \(text)\n\n".utf8), completion: .contentProcessed { _ in })
     }
 
     func sendEvent(_ object: [String: Any]) {
