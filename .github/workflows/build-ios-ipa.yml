@@ -37,8 +37,9 @@ permissions:
   contents: write   # needed only to publish the Release on tag pushes
 
 concurrency:
-  group: ios-ipa-${{ github.ref }}
-  cancel-in-progress: true
+  # Unique per run so a stuck/zombie run cannot block new ones.
+  group: ios-ipa-${{ github.ref }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   build:
