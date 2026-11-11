@@ -189,6 +189,19 @@ final class LocalLLMServer: @unchecked Sendable {
         let responder = LocalHTTPResponder(connection: connection)
         let path = request.path.split(separator: "?").first.map(String.init) ?? request.path
 
+        // CORS preflight (ChatBox and other browser/PWA clients send this with
+        // no auth header): answer it before the API-key check or it 401s and
+        // the client can never reach the real endpoint.
+        if request.method == "OPTIONS" {
+            responder.sendStatus(204)
+            return
+        }
+        // Unauthenticated health check so clients can probe reachability.
+        if request.method == "GET", path == "/health" || path == "/" {
+            responder.sendJSON(status: 200, ["status": "ok"])
+            return
+        }
+
         guard LocalModelProviderRegistrar.isAuthorized(request.headers["authorization"]) else {
             responder.sendJSON(status: 401, ["error": ["message": "Invalid API key for the on-device model server", "type": "invalid_request_error", "code": "invalid_api_key"]])
             return
@@ -597,6 +610,7 @@ final class LocalHTTPResponder: @unchecked Sendable {
         let body = (try? JSONSerialization.data(withJSONObject: object, options: [.withoutEscapingSlashes])) ?? Data()
         var head = "HTTP/1.1 \(status) \(Self.reason(status))\r\n"
         head += "Content-Type: application/json; charset=utf-8\r\n"
+        head += Self.corsHeaders
         head += "Content-Length: \(body.count)\r\n"
         head += "Connection: close\r\n\r\n"
         var payload = Data(head.utf8)
@@ -607,9 +621,21 @@ final class LocalHTTPResponder: @unchecked Sendable {
     }
 
     func beginEventStream() {
-        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+        let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream; charset=utf-8\r\nCache-Control: no-cache\r\n" + Self.corsHeaders + "Connection: close\r\n\r\n"
         connection.send(content: Data(head.utf8), completion: .contentProcessed { _ in })
     }
+
+    /// A bare status (e.g. 204 for a CORS preflight).
+    func sendStatus(_ status: Int) {
+        let head = "HTTP/1.1 \(status) \(Self.reason(status))\r\n" + Self.corsHeaders + "Content-Length: 0\r\nConnection: close\r\n\r\n"
+        connection.send(content: Data(head.utf8), isComplete: true, completion: .contentProcessed { [weak self] _ in self?.close() })
+    }
+
+    private static let corsHeaders =
+        "Access-Control-Allow-Origin: *\r\n" +
+        "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n" +
+        "Access-Control-Allow-Headers: Authorization, Content-Type\r\n" +
+        "Access-Control-Max-Age: 86400\r\n"
 
     /// An SSE comment line — ignored by clients but keeps the connection from
     /// idling out while the model loads / processes the prompt.
@@ -642,6 +668,7 @@ final class LocalHTTPResponder: @unchecked Sendable {
     private static func reason(_ status: Int) -> String {
         switch status {
         case 200: return "OK"
+        case 204: return "No Content"
         case 400: return "Bad Request"
         case 401: return "Unauthorized"
         case 404: return "Not Found"
